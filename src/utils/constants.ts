@@ -31,10 +31,12 @@ export const STORAGE_KEYS = {
 
 // Default user data (empty - user must onboard)
 export const DEFAULT_WALLET_BALANCE = 1000;
+export const DEFAULT_UPI_ID = '798831241@upi';
 
 export const DEFAULT_USER = {
   name: '',
   phone: '',
+  upiId: DEFAULT_UPI_ID,
   balance: DEFAULT_WALLET_BALANCE,
   walletBalance: DEFAULT_WALLET_BALANCE,
   bankBalance: 0,
@@ -57,6 +59,7 @@ export const DEFAULT_SETTINGS = {
   isSoundboxEnabled: true,
   soundboxLanguage: 'en' as const,
   balanceSource: 'WALLET' as const,
+  autoSwitchPaymentMode: true,
   isWidgetEnabled: true,
   autoBalanceRefresh: true,
   autoBalanceOnAppOpen: true,

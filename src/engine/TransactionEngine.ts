@@ -229,29 +229,20 @@ export async function executeWalletTransaction(
   const updatedTxn = { ...transaction, status: 'SENT' as TransactionStatus };
 
   try {
-    PaymentManager.transition('VALIDATING', 'Wallet payment validation');
-    onStatusUpdate(transaction.id, 'SENT', 'Connecting to Edge Wallet...');
+    PaymentManager.transition('VALIDATING', 'Wallet PIN verified');
+    onStatusUpdate(transaction.id, 'PENDING', 'Processing wallet payment...');
 
-    PaymentManager.transition('PREPARING', 'Preparing wallet transfer');
-    await new Promise<void>(r => setTimeout(r, 1200));
-    onStatusUpdate(transaction.id, 'PENDING', 'Verifying UPI credentials...');
-
-    PaymentManager.transition('PROCESSING', 'Processing wallet payment');
-    await new Promise<void>(r => setTimeout(r, 1500));
-    onStatusUpdate(transaction.id, 'SENT', 'Securing transaction bridge...');
-
-    PaymentManager.transition('WAITING_CONFIRMATION', 'Waiting for wallet response');
-    await new Promise<void>(r => setTimeout(r, 1800));
-    onStatusUpdate(transaction.id, 'SENT', 'Waiting for wallet response...');
-
-    await new Promise<void>(r => setTimeout(r, 1500));
+    PaymentManager.transition('PROCESSING', 'Simulated wallet transfer');
+    await new Promise<void>(r => setTimeout(r, 600));
 
     PaymentManager.transition('SUCCESS', 'Wallet payment completed');
     onStatusUpdate(transaction.id, 'SUCCESS', 'Payment processed successfully!');
+    PaymentManager.releaseLock();
     return { ...updatedTxn, status: 'SUCCESS' };
 
   } catch (error) {
     PaymentManager.transition('FAILED', 'Wallet transaction failed');
+    PaymentManager.releaseLock();
     onStatusUpdate(transaction.id, 'FAILED', 'Wallet transfer failed.');
     return { ...updatedTxn, status: 'FAILED' };
   }

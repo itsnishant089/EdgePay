@@ -47,6 +47,7 @@ import { PaymentManager } from './engine/PaymentManager';
 import { startPendingTransactionMonitor } from './engine/PendingTransactionMonitor';
 import { startSoundbox, stopSoundbox, updateSoundboxConfig } from './engine/PaymentSoundbox';
 import { isWidgetAvailable, startPaymentWidget } from './engine/WidgetService';
+import { getAutoBalanceSource } from './utils/paymentMode';
 import { translations } from './utils/i18n';
 import { LanguageModal } from './components/LanguageModal';
 import { useTheme, spacing, shadows } from './theme';
@@ -129,6 +130,7 @@ function AppContent() {
   const isMerchantMode = useStore(state => state.user.isMerchantMode);
 
   const setNetworkMode = useStore(state => state.setNetworkMode);
+  const networkMode = useStore(state => state.networkMode);
   const setSmsPermissions = useStore(state => state.setSmsPermissions);
   const setUssdPermissions = useStore(state => state.setUssdPermissions);
 
@@ -139,6 +141,19 @@ function AppContent() {
   }, []);
 
   useNetworkMonitor(setNetworkMode);
+
+  const autoSwitchPaymentMode = useStore(state => state.settings.autoSwitchPaymentMode);
+  const setSettings = useStore(state => state.setSettings);
+
+  // Auto-switch wallet (online) ↔ bank/USSD (offline) for balance display
+  useEffect(() => {
+    if (autoSwitchPaymentMode === false) return;
+    const source = getAutoBalanceSource(networkMode);
+    const current = useStore.getState().settings.balanceSource;
+    if (current !== source) {
+      setSettings({ balanceSource: source });
+    }
+  }, [networkMode, autoSwitchPaymentMode, setSettings]);
 
   // Read soundbox settings from store
   const soundboxEnabled = useStore(state => state.settings.isSoundboxEnabled);

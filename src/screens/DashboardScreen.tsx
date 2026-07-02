@@ -276,6 +276,10 @@ export const DashboardScreen: React.FC<{ navigation: any }> = ({ navigation }) =
   }, [isRevealed, displayBalance, balanceSource, user.bank, handleCheckBalance]);
 
   const toggleBalanceSource = () => {
+    if (settings.autoSwitchPaymentMode !== false) {
+      Alert.alert('Auto-Switch Active', 'Turn off Auto-Switch Wallet / Bank in Settings to toggle manually.');
+      return;
+    }
     const next: BalanceSource = balanceSource === 'WALLET' ? 'BANK' : 'WALLET';
     setSettings({ balanceSource: next });
     setUser({ balance: getDisplayBalance(user, next) });

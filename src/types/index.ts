@@ -93,6 +93,7 @@ export type BalanceSource = 'WALLET' | 'BANK';
 export interface UserData {
   name: string;
   phone: string;
+  upiId?: string;
   balance: number;
   walletBalance: number;
   bankBalance: number;
@@ -131,6 +132,7 @@ export interface AppSettings {
   isSoundboxEnabled: boolean;
   soundboxLanguage: 'en' | 'hi';
   balanceSource: BalanceSource;
+  autoSwitchPaymentMode: boolean;
   isWidgetEnabled: boolean;
   autoBalanceRefresh: boolean;
   autoBalanceOnAppOpen: boolean;

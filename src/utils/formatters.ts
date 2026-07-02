@@ -1,5 +1,13 @@
 // ─── Formatters ──────────────────────────────────────────────────────
 
+import { DEFAULT_UPI_ID } from './constants';
+import type { UserData } from '../types';
+
+/** User's display UPI ID (default 798831241@upi) */
+export function getUserUpiId(user: Pick<UserData, 'upiId' | 'phone'>): string {
+  return user.upiId?.trim() || DEFAULT_UPI_ID;
+}
+
 /**
  * Format currency amount with symbol
  */

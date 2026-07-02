@@ -5,15 +5,16 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import RNQRGenerator from 'rn-qr-generator';
 import { useTheme, typography } from '../theme';
 import { useStore } from '../store/useStore';
+import { getUserUpiId } from '../utils/formatters';
 
 export const MerchantQRScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
   const user = useStore(state => state.user);
   const [qrUri, setQrUri] = useState<string | null>(null);
+  const userUpi = getUserUpiId(user);
 
-  // Generate UPI URI
-  const upiUri = `upi://pay?pa=${user.phone}@edgepay&pn=${encodeURIComponent(user.name || 'EdgePay User')}&cu=INR`;
+  const upiUri = `upi://pay?pa=${encodeURIComponent(userUpi)}&pn=${encodeURIComponent(user.name || 'EdgePay User')}&cu=INR`;
 
   useEffect(() => {
     RNQRGenerator.generate({
@@ -33,7 +34,7 @@ export const MerchantQRScreen: React.FC<{ navigation: any }> = ({ navigation }) 
   const handleShare = async () => {
     try {
       await Share.share({
-        message: `Pay me via EdgePay UPI: ${user.phone}@edgepay`,
+        message: `Pay me via EdgePay UPI: ${userUpi}`,
       });
     } catch (error: any) {
       Alert.alert(error.message);
@@ -58,7 +59,7 @@ export const MerchantQRScreen: React.FC<{ navigation: any }> = ({ navigation }) 
           </View>
           
           <Text style={[s.merchantName, { color: colors.textPrimary }]}>{user.name}</Text>
-          <Text style={[s.merchantUpi, { color: colors.textSecondary }]}>{user.phone}@edgepay</Text>
+          <Text style={[s.merchantUpi, { color: colors.textSecondary }]}>{userUpi}</Text>
           
           <View style={s.qrWrapper}>
             {qrUri ? (

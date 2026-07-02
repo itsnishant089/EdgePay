@@ -11,7 +11,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useStore } from '../store/useStore';
 import { requestSmsPermissions } from '../engine/SmsService';
 import { requestUssdPermissions } from '../engine/USSDService';
-import { SUPPORTED_BANKS } from '../utils/constants';
+import { SUPPORTED_BANKS, DEFAULT_WALLET_BALANCE, DEFAULT_UPI_ID } from '../utils/constants';
 import { useTheme, spacing, typography, gradients } from '../theme';
 
 export const SetupScreen: React.FC = () => {
@@ -39,9 +39,12 @@ export const SetupScreen: React.FC = () => {
         name,
         phone,
         bank,
+        upiId: DEFAULT_UPI_ID,
         isOnboarded: true,
         currency: '₹',
-        balance: 0,
+        balance: DEFAULT_WALLET_BALANCE,
+        walletBalance: DEFAULT_WALLET_BALANCE,
+        bankBalance: 0,
         goalAmount: 0,
         monthlyBudget: 0,
         spentThisMonth: 0,

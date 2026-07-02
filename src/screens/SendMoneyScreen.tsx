@@ -10,19 +10,20 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { AmountInput } from '../components/AmountInput';
-import { useStore, getDisplayBalance } from '../store/useStore';
+import { useStore } from '../store/useStore';
 import { createTransaction, executeUssdTransaction, executeWalletTransaction } from '../engine/TransactionEngine';
 import { validateUssdReceiver, buildRequestMoneyCommand } from '../engine/USSDBuilder';
 import { dialUssdCode } from '../engine/USSDService';
 import { PaymentManager } from '../engine/PaymentManager';
-import { formatCurrency } from '../utils/formatters';
+import { formatCurrency, getUserUpiId } from '../utils/formatters';
 import { translations } from '../utils/i18n';
 import { useTheme, spacing, typography, gradients } from '../theme';
 import { PinScreen } from '../components/PinScreen';
 import { authenticate, isBiometricAvailable } from '../engine/BiometricService';
 import { AvatarCircle } from '../components/AvatarCircle';
 import { QuickAmountChips } from '../components/QuickAmountChips';
-import { TAB_BAR_HEIGHT } from '../utils/constants';
+import { TAB_BAR_HEIGHT, DEFAULT_WALLET_BALANCE } from '../utils/constants';
+import { resolvePaymentMethod } from '../utils/paymentMode';
 import type { TransactionStatus, TransactionMethod } from '../types';
 
 export const SendMoneyScreen: React.FC<{ navigation: any; route: any }> = ({
@@ -30,9 +31,8 @@ export const SendMoneyScreen: React.FC<{ navigation: any; route: any }> = ({
 }) => {
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
-  const { user, networkMode, language, settings, addTransaction, updateTransaction, removeTransaction, setUser } = useStore();
+  const { user, networkMode, language, settings, addTransaction, updateTransaction, setUser } = useStore();
   const t = translations[language] || translations.en;
-  const displayBalance = getDisplayBalance(user, settings.balanceSource);
 
   const isRequestMode = route?.params?.mode === 'request';
   const initialReceiver = route?.params?.receiver || '';
@@ -42,6 +42,10 @@ export const SendMoneyScreen: React.FC<{ navigation: any; route: any }> = ({
   const [amount, setAmount] = useState(route?.params?.amount ? String(route.params.amount) : '');
   const [note, setNote] = useState('');
   const [method, setMethod] = useState<TransactionMethod>(route?.params?.method || 'USSD');
+  const autoSwitch = settings.autoSwitchPaymentMode !== false;
+  const effectiveMethod = resolvePaymentMethod(networkMode, settings, method);
+  const walletBalance = user.walletBalance ?? user.balance ?? DEFAULT_WALLET_BALANCE;
+  const userUpi = getUserUpiId(user);
   
   const [isSending, setIsSending] = useState(false);
   const [txnStatus, setTxnStatus] = useState<TransactionStatus | null>(null);
@@ -52,6 +56,13 @@ export const SendMoneyScreen: React.FC<{ navigation: any; route: any }> = ({
   const executionLocked = useRef(false);
   const currentTxnId = useRef<string | null>(null);
   const amountRef = useRef<TextInput>(null);
+
+  useEffect(() => {
+    if (route?.params?.method) return;
+    if (autoSwitch) {
+      setMethod(networkMode === 'ONLINE' ? 'WALLET' : 'USSD');
+    }
+  }, [networkMode, autoSwitch, route?.params?.method]);
 
   useEffect(() => {
     if (route?.params?.receiver != null) setReceiver(route.params.receiver);
@@ -75,7 +86,7 @@ export const SendMoneyScreen: React.FC<{ navigation: any; route: any }> = ({
   const numericAmount = parseInt(amount, 10) || 0;
   const receiverValidation = validateUssdReceiver(receiver);
   const isInputValid = receiverValidation.valid && numericAmount > 0 &&
-    (method !== 'WALLET' || numericAmount <= displayBalance);
+    (effectiveMethod !== 'WALLET' || numericAmount <= walletBalance);
 
   const handleInitialPay = () => {
     if (!isInputValid || isSending) return;
@@ -118,9 +129,9 @@ export const SendMoneyScreen: React.FC<{ navigation: any; route: any }> = ({
     setShowPinEntry(true);
   };
 
-  const onPinVerified = (pin: string) => {
+  const onPinVerified = (_pin: string) => {
     setShowPinEntry(false);
-    if (method === 'WALLET') executeSimulatedWalletPayment();
+    if (effectiveMethod === 'WALLET') executeSimulatedWalletPayment();
     else executeRealUssdPayment();
   };
 
@@ -139,20 +150,22 @@ export const SendMoneyScreen: React.FC<{ navigation: any; route: any }> = ({
       const result = await executeUssdTransaction(txn, (id, status, message) => {
         setTxnStatus(status);
         setStatusMessage(message || '');
-        updateTransaction(id, { status });
+        updateTransaction(id, { status, responseMessage: message });
       });
       if (result.status === 'SUCCESS') {
-        if (method === 'WALLET') {
-          const newWallet = Math.max(0, (user.walletBalance ?? user.balance) - numericAmount);
+        if (effectiveMethod === 'WALLET') {
+          const newWallet = Math.max(0, walletBalance - numericAmount);
           setUser({ walletBalance: newWallet, balance: newWallet });
         }
       } else if (result.status === 'FAILED' && currentTxnId.current) {
-        removeTransaction(currentTxnId.current);
+        updateTransaction(currentTxnId.current, { status: 'FAILED', responseMessage: result.status });
       }
     } catch (error: any) {
       setTxnStatus('FAILED');
       setStatusMessage(t.failed);
-      if (currentTxnId.current) removeTransaction(currentTxnId.current);
+      if (currentTxnId.current) {
+        updateTransaction(currentTxnId.current, { status: 'FAILED', responseMessage: error?.message });
+      }
     } finally {
       setIsSending(false);
       executionLocked.current = false;
@@ -176,18 +189,20 @@ export const SendMoneyScreen: React.FC<{ navigation: any; route: any }> = ({
       const result = await executeWalletTransaction(txn, (id, status, message) => {
         setTxnStatus(status);
         setStatusMessage(message || '');
-        updateTransaction(id, { status });
+        updateTransaction(id, { status, responseMessage: message });
       });
       if (result.status === 'SUCCESS') {
-        const newWallet = Math.max(0, (user.walletBalance ?? user.balance) - numericAmount);
+        const newWallet = Math.max(0, walletBalance - numericAmount);
         setUser({ walletBalance: newWallet, balance: newWallet });
       } else if (result.status === 'FAILED' && currentTxnId.current) {
-        removeTransaction(currentTxnId.current);
+        updateTransaction(currentTxnId.current, { status: 'FAILED', responseMessage: 'Wallet transfer failed' });
       }
     } catch (error: any) {
       setTxnStatus('FAILED');
       setStatusMessage('Wallet transfer failed');
-      if (currentTxnId.current) removeTransaction(currentTxnId.current);
+      if (currentTxnId.current) {
+        updateTransaction(currentTxnId.current, { status: 'FAILED', responseMessage: error?.message });
+      }
     } finally {
       setIsSending(false);
       executionLocked.current = false;
@@ -239,7 +254,7 @@ export const SendMoneyScreen: React.FC<{ navigation: any; route: any }> = ({
             </View>
             <View style={s.receiptRow}>
               <Text style={{ color: colors.textSecondary }}>UPI ID</Text>
-              <Text style={{ color: colors.textPrimary, fontWeight: '700' }}>{user.phone}@edgepay</Text>
+              <Text style={{ color: colors.textPrimary, fontWeight: '700' }}>{userUpi}</Text>
             </View>
             <View style={s.receiptRow}>
               <Text style={{ color: colors.textSecondary }}>Ref ID</Text>
@@ -281,9 +296,15 @@ export const SendMoneyScreen: React.FC<{ navigation: any; route: any }> = ({
         </TouchableOpacity>
         <Text style={{ color: colors.textPrimary, fontSize: 18, fontWeight: '700' }}>{isRequestMode ? 'Request Money' : 'Send Money'}</Text>
         {!isRequestMode ? (
-          <TouchableOpacity style={[s.methodToggle, { backgroundColor: colors.surfaceHighlight }]} onPress={() => setMethod(method === 'USSD' ? 'WALLET' : 'USSD')}>
-            <Icon name={method === 'USSD' ? 'bank-outline' : 'wallet-outline'} size={14} color={colors.primary} />
-            <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '700' }}>{method === 'USSD' ? 'BANK' : 'WALLET'}</Text>
+          <TouchableOpacity
+            style={[s.methodToggle, { backgroundColor: colors.surfaceHighlight, opacity: autoSwitch ? 0.85 : 1 }]}
+            onPress={() => !autoSwitch && setMethod(method === 'USSD' ? 'WALLET' : 'USSD')}
+            disabled={autoSwitch}
+          >
+            <Icon name={effectiveMethod === 'USSD' ? 'bank-outline' : 'wallet-outline'} size={14} color={colors.primary} />
+            <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '700' }}>
+              {autoSwitch ? (effectiveMethod === 'WALLET' ? 'WALLET · AUTO' : 'USSD · AUTO') : (method === 'USSD' ? 'BANK' : 'WALLET')}
+            </Text>
           </TouchableOpacity>
         ) : <View style={{ width: 40 }} />}
       </View>
@@ -346,9 +367,9 @@ export const SendMoneyScreen: React.FC<{ navigation: any; route: any }> = ({
           <Text style={[s.error, { color: colors.error }]}>{receiverValidation.error}</Text>
         )}
 
-        {method === 'WALLET' && numericAmount > displayBalance && (
+        {effectiveMethod === 'WALLET' && numericAmount > walletBalance && (
           <Text style={[s.error, { color: colors.error }]}>
-            Insufficient wallet balance. Available: {formatCurrency(displayBalance)}
+            Insufficient wallet balance. Available: {formatCurrency(walletBalance)}
           </Text>
         )}
       </ScrollView>
@@ -376,7 +397,9 @@ export const SendMoneyScreen: React.FC<{ navigation: any; route: any }> = ({
               <AvatarCircle name={receiverName || receiver} size={48} />
               <View style={{ marginLeft: 12, flex: 1 }}>
                 <Text style={[s.modalTitle, { color: colors.textPrimary }]} numberOfLines={1}>{isRequestMode ? 'Requesting from' : 'Paying'} {receiverName || receiver}</Text>
-                <Text style={{ color: colors.textSecondary, fontSize: 13 }}>{method === 'WALLET' ? 'From Edge Wallet' : `From ${user.bank}`}</Text>
+                <Text style={{ color: colors.textSecondary, fontSize: 13 }}>
+                  {effectiveMethod === 'WALLET' ? 'From Edge Wallet (simulation)' : `From ${user.bank}`}
+                </Text>
               </View>
             </View>
 
@@ -399,8 +422,8 @@ export const SendMoneyScreen: React.FC<{ navigation: any; route: any }> = ({
       <PinScreen 
         visible={showPinEntry} 
         mode="verify" 
-        title={method === 'WALLET' ? "Wallet PIN" : "UPI PIN"}
-        subtitle={`To pay ₹${numericAmount} to ${receiverName || receiver}`}
+        title={effectiveMethod === 'WALLET' ? 'Wallet PIN' : 'UPI PIN'}
+        subtitle={`To pay ₹${numericAmount} to ${receiverName || receiver}${effectiveMethod === 'WALLET' ? ' via Edge Wallet' : ''}`}
         onComplete={onPinVerified} 
         onCancel={() => setShowPinEntry(false)} 
       />

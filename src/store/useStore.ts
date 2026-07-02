@@ -294,6 +294,7 @@ export async function initializeStore(): Promise<void> {
       state.user = {
         ...DEFAULT_USER,
         ...parsedUser,
+        upiId: parsedUser.upiId || DEFAULT_USER.upiId,
         walletBalance,
         bankBalance,
         balance: walletBalance > 0 ? walletBalance : DEFAULT_WALLET_BALANCE,
