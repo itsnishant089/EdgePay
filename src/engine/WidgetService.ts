@@ -69,6 +69,36 @@ export async function stopPaymentWidget(): Promise<boolean> {
   }
 }
 
+export async function showQuickPayWidget(): Promise<boolean> {
+  if (!isWidgetAvailable()) return false;
+  try {
+    await PaymentWidgetModule.showQuickPayWidget();
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+export async function showFinanceWidget(): Promise<boolean> {
+  if (!isWidgetAvailable()) return false;
+  try {
+    await PaymentWidgetModule.showFinanceWidget();
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+export async function hideFloatingWidgets(): Promise<boolean> {
+  if (!isWidgetAvailable()) return false;
+  try {
+    await PaymentWidgetModule.hideFloatingWidgets();
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
 /**
  * Check if the widget service is currently running
  */
@@ -117,6 +147,42 @@ export async function updateWidgetConfig(
     await PaymentWidgetModule.updateConfig(merged);
     return true;
   } catch {
+    return false;
+  }
+}
+
+export async function syncHomeWidget(
+  walletBalance: number,
+  bankBalance: number,
+  lastTxLabel?: string,
+): Promise<boolean> {
+  if (!isWidgetAvailable()) return false;
+  try {
+    await PaymentWidgetModule.syncHomeWidget(walletBalance, bankBalance, lastTxLabel ?? '');
+    return true;
+  } catch (err) {
+    console.error('[WidgetService] Failed to sync home widget:', err);
+    return false;
+  }
+}
+
+export async function syncBalanceWidget(
+  walletBalance: number,
+  bankBalance: number,
+  todaySpent: number,
+  lastTxLabel?: string,
+): Promise<boolean> {
+  if (!isWidgetAvailable()) return false;
+  try {
+    await PaymentWidgetModule.syncBalanceWidget(
+      walletBalance,
+      bankBalance,
+      todaySpent,
+      lastTxLabel ?? '',
+    );
+    return true;
+  } catch (err) {
+    console.error('[WidgetService] Failed to sync balance widget:', err);
     return false;
   }
 }

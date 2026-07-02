@@ -5,13 +5,14 @@ import React, { useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Animated, Easing } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import type { NetworkMode } from '../types';
-import { colors, spacing, borderRadius, typography } from '../theme';
+import { useTheme, spacing, borderRadius, typography } from '../theme';
 
 interface NetworkIndicatorProps {
   mode: NetworkMode;
 }
 
 export const NetworkIndicator: React.FC<NetworkIndicatorProps> = ({ mode }) => {
+  const { colors } = useTheme();
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
@@ -53,8 +54,8 @@ export const NetworkIndicator: React.FC<NetworkIndicatorProps> = ({ mode }) => {
     <Animated.View
       style={[
         styles.container,
-        isGsm && styles.containerGsm,
-        isDetecting && styles.containerDetecting,
+        isGsm && { backgroundColor: colors.gsmBackground, borderColor: colors.gsmBorder },
+        isDetecting && { backgroundColor: 'rgba(255, 255, 255, 0.05)', borderColor: colors.border },
         { opacity: fadeAnim },
       ]}
     >
@@ -63,16 +64,16 @@ export const NetworkIndicator: React.FC<NetworkIndicatorProps> = ({ mode }) => {
           <Animated.View
             style={[
               styles.pulse,
-              { transform: [{ scale: pulseAnim }] },
+              { backgroundColor: colors.gsmActive, transform: [{ scale: pulseAnim }] },
             ]}
           />
         )}
         <View
           style={[
             styles.dot,
-            isGsm && styles.dotGsm,
-            isDetecting && styles.dotDetecting,
-            !isGsm && !isDetecting && styles.dotOnline,
+            isGsm && { backgroundColor: colors.gsmActive },
+            isDetecting && { backgroundColor: colors.textTertiary },
+            !isGsm && !isDetecting && { backgroundColor: colors.success },
           ]}
         />
       </View>
@@ -87,15 +88,14 @@ export const NetworkIndicator: React.FC<NetworkIndicatorProps> = ({ mode }) => {
           <Text
             style={[
               styles.label,
-              isGsm && styles.labelGsm,
-              isDetecting && styles.labelDetecting,
+              { color: isDetecting ? colors.textTertiary : isGsm ? colors.gsmActive : colors.success }
             ]}
           >
             {isDetecting ? 'Detecting...' : isGsm ? 'Offline' : 'Online'}
           </Text>
         </View>
         {isGsm && (
-          <Text style={styles.sublabel}>USSD Payment Mode</Text>
+          <Text style={[styles.sublabel, { color: colors.gsmActive }]}>USSD Payment Mode</Text>
         )}
       </View>
     </Animated.View>
@@ -114,14 +114,6 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(48, 209, 88, 0.2)',
     gap: spacing.sm,
   },
-  containerGsm: {
-    backgroundColor: colors.gsmBackground,
-    borderColor: colors.gsmBorder,
-  },
-  containerDetecting: {
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderColor: colors.border,
-  },
   dotContainer: {
     width: 10,
     height: 10,
@@ -133,7 +125,6 @@ const styles = StyleSheet.create({
     width: 10,
     height: 10,
     borderRadius: 5,
-    backgroundColor: colors.gsmActive,
     opacity: 0.4,
   },
   dot: {
@@ -141,15 +132,6 @@ const styles = StyleSheet.create({
     height: 6,
     borderRadius: 3,
     zIndex: 2,
-  },
-  dotOnline: {
-    backgroundColor: colors.success,
-  },
-  dotGsm: {
-    backgroundColor: colors.gsmActive,
-  },
-  dotDetecting: {
-    backgroundColor: colors.textTertiary,
   },
   textStack: {
     justifyContent: 'center',
@@ -161,19 +143,11 @@ const styles = StyleSheet.create({
   },
   label: {
     ...typography.labelSmall,
-    color: colors.success,
     fontSize: 10,
     fontWeight: '700',
   },
-  labelGsm: {
-    color: colors.gsmActive,
-  },
-  labelDetecting: {
-    color: colors.textTertiary,
-  },
   sublabel: {
     ...typography.caption,
-    color: colors.gsmActive,
     opacity: 0.8,
     fontSize: 8,
     lineHeight: 8,

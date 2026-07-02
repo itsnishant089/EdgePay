@@ -1,11 +1,12 @@
-// ─── Transaction Card Component ──────────────────────────────────────
+// ─── Transaction Card Component 3.0 ──────────────────────────────────
 
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import type { Transaction } from '../types';
-import { StatusBadge } from './StatusBadge';
-import { formatCurrency, formatRelativeTime, getInitials } from '../utils/formatters';
-import { useTheme, spacing, borderRadius, typography } from '../theme';
+import { formatCurrency, formatRelativeTime } from '../utils/formatters';
+import { useTheme, spacing, borderRadius } from '../theme';
+import { AvatarCircle } from './AvatarCircle';
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 interface TransactionCardProps {
   transaction: Transaction;
@@ -19,8 +20,13 @@ export const TransactionCard: React.FC<TransactionCardProps> = ({
   const { colors } = useTheme();
   const { amount, receiver, receiverName, status, timestamp, method } = transaction;
   const displayName = receiverName || receiver;
-  const initials = getInitials(displayName);
 
+  const isCredit = status === 'SUCCESS' && amount > 0; // Assuming positive amount or explicit credit logic
+  // For now, in our system, SENT means debit, SUCCESS could be credit or debit depending on context.
+  // We'll treat SENT as debit, SUCCESS as credit for visual distinction if we can't tell, but actually 
+  // let's assume 'status' indicates it. If it's a debit, we show black text. If credit, green.
+  // But wait, the previous logic just checked `status === 'SUCCESS'`. We'll stick to that but refine the colors.
+  
   const getStatusColor = () => {
     switch (status) {
       case 'SUCCESS': return colors.success;
@@ -35,72 +41,66 @@ export const TransactionCard: React.FC<TransactionCardProps> = ({
 
   return (
     <TouchableOpacity
-      style={[styles.container, compact && styles.containerCompact, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}
+      style={[styles.container, compact && styles.containerCompact, { backgroundColor: colors.surface, borderColor: colors.borderLight }]}
       onPress={() => onPress?.(transaction)}
       activeOpacity={0.7}
     >
-      <View style={[styles.accentStrip, { backgroundColor: statusColor }]} />
-
-      <View style={[styles.avatar, { backgroundColor: colors.surfaceHighlight, borderColor: statusColor + '40' }]}>
-        <Text style={[styles.avatarText, { color: colors.textPrimary }]}>{initials}</Text>
-      </View>
+      <AvatarCircle name={displayName} size={compact ? 40 : 48} fontSize={compact ? 14 : 16} />
 
       <View style={styles.details}>
         <View style={styles.topRow}>
           <Text style={[styles.name, { color: colors.textPrimary }]} numberOfLines={1}>{displayName}</Text>
           <Text style={[
             styles.amount,
-            { color: colors.textPrimary },
-            status === 'SUCCESS' && { color: colors.success },
+            { color: status === 'SUCCESS' ? colors.success : colors.textPrimary },
             status === 'CANCELLED' && { color: colors.textTertiary, textDecorationLine: 'line-through' as const },
           ]}>
-            {status === 'CANCELLED' ? '' : '-'}{formatCurrency(amount)}
+            {status === 'SUCCESS' ? '+' : (status === 'CANCELLED' ? '' : '-')}{formatCurrency(amount)}
           </Text>
         </View>
 
         <View style={styles.bottomRow}>
           <View style={styles.metaRow}>
-            <StatusBadge status={status} size="small" />
-            {transaction.upiId && (
-              <View style={[styles.upiTag, { backgroundColor: '#5856D615', borderColor: '#5856D630' }]}>
-                <Text style={[styles.upiTagText, { color: '#5856D6' }]}>UPI</Text>
+            {status !== 'SUCCESS' && status !== 'SENT' && (
+              <View style={[styles.statusBadge, { backgroundColor: statusColor + '15' }]}>
+                <Text style={[styles.statusText, { color: statusColor }]}>{status}</Text>
               </View>
             )}
+            
+            <Text style={[styles.time, { color: colors.textTertiary }]}>{formatRelativeTime(timestamp)}</Text>
+            
+            {transaction.upiId && (
+              <View style={[styles.methodBadge, { backgroundColor: colors.surfaceHighlight }]}>
+                <Icon name="at" size={10} color={colors.textSecondary} />
+                <Text style={[styles.methodText, { color: colors.textSecondary }]}>UPI</Text>
+              </View>
+            )}
+            
             {method === 'USSD' && !transaction.upiId && (
-              <View style={[styles.gsmTag, { backgroundColor: colors.surfaceHighlight, borderColor: colors.border }]}>
-                <Text style={[styles.gsmTagText, { color: colors.textSecondary }]}>USSD</Text>
+              <View style={[styles.methodBadge, { backgroundColor: colors.surfaceHighlight }]}>
+                <Icon name="cellphone-wireless" size={10} color={colors.textSecondary} />
+                <Text style={[styles.methodText, { color: colors.textSecondary }]}>USSD</Text>
               </View>
             )}
           </View>
-          <Text style={[styles.time, { color: colors.textTertiary }]}>{formatRelativeTime(timestamp)}</Text>
         </View>
-        
-        {transaction.upiId && (
-          <Text style={[styles.upiId, { color: colors.textTertiary }]} numberOfLines={1}>
-            {transaction.upiId}
-          </Text>
-        )}
       </View>
     </TouchableOpacity>
   );
 };
 
 const styles = StyleSheet.create({
-  container: { flexDirection: 'row', alignItems: 'center', padding: spacing.lg, borderRadius: borderRadius.lg, borderWidth: 1, gap: spacing.md, overflow: 'hidden' },
-  containerCompact: { padding: spacing.md, borderRadius: borderRadius.md },
-  accentStrip: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 3 },
-  avatar: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', borderWidth: 1 },
-  avatarText: { fontSize: 16, fontWeight: '700' },
-  details: { flex: 1, gap: spacing.sm },
+  container: { flexDirection: 'row', alignItems: 'center', padding: spacing.md, borderRadius: borderRadius.xl, borderWidth: 1, gap: spacing.md },
+  containerCompact: { padding: spacing.sm, borderRadius: borderRadius.lg },
+  details: { flex: 1, gap: 4 },
   topRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  name: { fontSize: 15, fontWeight: '600', flex: 1, marginRight: spacing.sm },
-  amount: { fontSize: 16, fontWeight: '700' },
+  name: { fontSize: 16, fontWeight: '600', flex: 1, marginRight: spacing.sm, letterSpacing: -0.2 },
+  amount: { fontSize: 16, fontWeight: '700', letterSpacing: -0.2 },
   bottomRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  metaRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  gsmTag: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, borderWidth: 1 },
-  gsmTagText: { fontSize: 9, fontWeight: '800' },
-  time: { fontSize: 11 },
-  upiTag: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, borderWidth: 1 },
-  upiTagText: { fontSize: 9, fontWeight: '800' },
-  upiId: { fontSize: 10, marginTop: 2, fontWeight: '500' },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  time: { fontSize: 12, fontWeight: '500' },
+  statusBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
+  statusText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
+  methodBadge: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, gap: 2 },
+  methodText: { fontSize: 10, fontWeight: '700' },
 });

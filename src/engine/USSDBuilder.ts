@@ -17,21 +17,45 @@
 export function buildUssdCommand(receiver: string, amount: number): string {
   const cleanedAmount = Math.floor(amount);
   const target = sanitizeReceiver(receiver);
-  
-  // Decide selection strictly based on presence of @
-  const isVPA = target.includes('@');
-  
-  if (!isVPA) {
-    // SELECTION 1: MOBILE (*99*1*1*target*amount#)
-    return `*99*1*1*${target}*${cleanedAmount}#`;
-  } else {
-    // SELECTION 3: UPI ID (*99*1*3*target*amount#)
-    return `*99*1*3*${target}*${cleanedAmount}#`;
+  const validation = validateUssdReceiver(receiver);
+  if (validation.type === 'upi') {
+    return `*99*1*3*${target}*${cleanedAmount}*1#`;
   }
+  // Send money via mobile: *99*1*1*mobile*amount*1#
+  return `*99*1*1*${target}*${cleanedAmount}*1#`;
+}
+
+export function buildRequestMoneyCommand(receiver: string, amount: number): string {
+  const cleanedAmount = Math.floor(amount);
+  const target = sanitizeReceiver(receiver);
+  // Request money: *99*2*mobile*amount*1*1#
+  return `*99*2*${target}*${cleanedAmount}*1*1#`;
 }
 
 export function buildBasicUssdCommand(): string { return '*99#'; }
 export function buildBalanceCheckCommand(): string { return '*99*3#'; }
+export function buildChangeUpiPinCommand(): string { return '*99*7*2#'; }
+export function buildChangeUpiIdCommand(): string { return '*99*4*4#'; }
+export function buildMyDetailsCommand(): string { return '*99*4*3#'; }
+export function buildTransactionsCommand(): string { return '*99*6*1#'; }
+export function buildPendingRequestCommand(): string { return '*99*5#'; }
+
+export function parseUssdError(response: string): string {
+  const lowerResp = response.toLowerCase();
+  if (lowerResp.includes('invalid txn') || lowerResp.includes('not a valid selection')) {
+    return 'Invalid Bank Menu. The bank does not support this exact command format.';
+  }
+  if (lowerResp.includes('invalid upi pin') || lowerResp.includes('incorrect upi pin')) {
+    return 'Incorrect UPI PIN. Please try again.';
+  }
+  if (lowerResp.includes('timeout') || lowerResp.includes('session expired')) {
+    return 'USSD Session Timeout. The bank took too long to respond.';
+  }
+  if (lowerResp.includes('insufficient')) {
+    return 'Insufficient Balance.';
+  }
+  return response; // Return raw response if no match
+}
 
 /**
  * Sanitize receiver input - CLEANING FOR USSD
@@ -44,9 +68,10 @@ export function sanitizeReceiver(receiver: string): string {
   }
   
   // Mobile: Remove spaces, country code +91 or 91 if it's 12 digits
-  let mob = cleaned.replace(/[\s\-\.]/g, '');
+  let mob = cleaned.replace(/[\s\-\.\(\)]/g, '');
   if (mob.startsWith('+91')) mob = mob.substring(3);
   else if (mob.startsWith('91') && mob.length === 12) mob = mob.substring(2);
+  else if (mob.startsWith('0') && mob.length === 11) mob = mob.substring(1);
   
   // Final safeguard: keep only digits
   mob = mob.replace(/\D/g, '');

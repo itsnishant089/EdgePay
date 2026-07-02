@@ -26,15 +26,20 @@ export const STORAGE_KEYS = {
   PENDING_QUEUE: '@edgepay/pending_queue',
   SETTINGS: '@edgepay/settings',
   PIN_HASH: '@edgepay/pin_hash',
+  NOTIFICATIONS: '@edgepay/notifications',
 } as const;
 
 // Default user data (empty - user must onboard)
+export const DEFAULT_WALLET_BALANCE = 1000;
+
 export const DEFAULT_USER = {
   name: '',
   phone: '',
-  balance: 0,
+  balance: DEFAULT_WALLET_BALANCE,
+  walletBalance: DEFAULT_WALLET_BALANCE,
+  bankBalance: 0,
   currency: '₹',
-  bank: '',
+  bank: 'HDFC',
   isOnboarded: false,
   goalAmount: 0,
   monthlyBudget: 0,
@@ -51,8 +56,23 @@ export const DEFAULT_SETTINGS = {
   isBiometricEnabled: true,
   isSoundboxEnabled: true,
   soundboxLanguage: 'en' as const,
+  balanceSource: 'WALLET' as const,
   isWidgetEnabled: true,
+  autoBalanceRefresh: true,
+  autoBalanceOnAppOpen: true,
 } as const;
+
+/** Height reserved for the floating bottom tab bar so sticky buttons stay visible */
+export const TAB_BAR_HEIGHT = 88;
+
+/** HDFC balance enquiry SMS number */
+export const HDFC_BALANCE_SMS_NUMBER = '07308080808';
+
+/** Auto-refresh HDFC bank balance interval when app is active — 6 minutes */
+export const HDFC_BALANCE_REFRESH_MS = 360_000;
+
+/** Pending payment timeout */
+export const PENDING_TRANSACTION_TIMEOUT_MS = 2 * 60 * 1000;
 
 // Network check interval
 export const NETWORK_CHECK_INTERVAL_MS = 5000;
@@ -75,6 +95,7 @@ export const PIN_LENGTH = 4;
 
 // Supported bank IFSC patterns for USSD (SBI initial target)
 export const SUPPORTED_BANKS = [
+  { code: 'HDFC', name: 'HDFC Bank', ussdShortCode: '*99#' },
   { code: 'SBI', name: 'State Bank of India', ussdShortCode: '*99#' },
   { code: 'PNB', name: 'Punjab National Bank', ussdShortCode: '*99#' },
   { code: 'BOB', name: 'Bank of Baroda', ussdShortCode: '*99#' },

@@ -25,6 +25,20 @@
 - Integrated **Vision Camera** frame processor for rapid QR decoding.
 - Extracts UPI VPA and Amount directly from the QR code and populates the offline USSD string builder.
 
+### 5. 🧩 Triple-Widget Ecosystem
+- **Home Status Widget**: Real-time payment status on your home screen.
+- **2x2 Savings Goal Widget**: Track your savings progress at a glance.
+- **2x2 Expense Tracker Widget**: Large, bold percentage display of your monthly spending.
+
+### 6. 💸 Salary-Deduction Engine
+- Set a **Monthly Salary** or **Pocket Money** budget.
+- Automatic **auto-deduction** logic scans transaction history and updates your remaining balance.
+- Real-time **Spending Percentage** calculation.
+
+### 7. 🌍 Multi-Language Support
+- Full localization for **Hindi, Marathi, Urdu, Punjabi, Bengali, Kannada, Odia,** and **English**.
+- Dedicated Language Selector for a personalized experience.
+
 ---
 
 ## 🛠 Technical Architecture
@@ -47,16 +61,15 @@ EdgePay is built with a decoupled architecture where the UI layer communicates w
 ## 🏗 Directory Structure
 
 ```text
-EdgePay/
-├── android/               # Native Kotlin USSD & SMS bridges
+├── android/               # Native Kotlin USSD & SMS bridges + App Widgets
 ├── src/
-│   ├── engine/            # The Protocol Engine (SMS/USSD parsing)
-│   ├── screens/           # React Native Screens (Dashboard, PIN, QR)
-│   ├── components/        # Reusable UI Elements (Modals, Custom Inputs)
-│   ├── store/             # Zustand Store (Offline state persistence)
+│   ├── engine/            # The Protocol Engine (SMS/USSD/Widget parsing)
+│   ├── screens/           # React Native Screens (Dashboard, Expense Tracker)
+│   ├── components/        # Reusable UI Elements (Goal & Language Modals)
+│   ├── store/             # Zustand Store (Salary & Spending logic)
 │   ├── theme/             # Design Tokens & Colour Palettes
 │   └── utils/             # Formatters, i18n, Constants
-├── index.html             # High-Fidelity Engine Life-Simulation
+├── index.html             # High-Fidelity Landing Page & Simulation
 └── README.md              # Technical Specification
 ```
 
@@ -101,7 +114,7 @@ EdgePay/
 ---
 
 ## 🏆 Project Recognition
-Developed by **Nishant Kumar** for the **Advanced Agentic Coding Hackathon**.
+Developed by **Team "The Last Braincells"** (Nishant  & Team) for the **Advanced Agentic Coding Hackathon**.
 
 ---
 

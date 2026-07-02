@@ -7,7 +7,7 @@ import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NetworkIndicator } from './NetworkIndicator';
 import { useStore } from '../store/useStore';
-import { colors, spacing, typography } from '../theme';
+import { useTheme, spacing, typography } from '../theme';
 
 interface HeaderProps {
   title?: string;
@@ -23,9 +23,10 @@ export const Header: React.FC<HeaderProps> = ({
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
   const networkMode = useStore(state => state.networkMode);
+  const { colors } = useTheme();
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top + spacing.sm }]}>
+    <View style={[styles.container, { backgroundColor: colors.background, borderBottomColor: colors.borderLight, paddingTop: insets.top + spacing.sm }]}>
       <View style={styles.content}>
         {showLogo && (
           <View style={styles.logoRow}>
@@ -34,17 +35,17 @@ export const Header: React.FC<HeaderProps> = ({
               style={styles.logoImage}
               resizeMode="cover"
             />
-            <Text style={styles.logoText}>EdgePay</Text>
+            <Text style={[styles.logoText, { color: colors.textPrimary }]}>EdgePay</Text>
           </View>
         )}
         {title && !showLogo && (
-          <Text style={styles.title}>{title}</Text>
+          <Text style={[styles.title, { color: colors.textPrimary }]}>{title}</Text>
         )}
         {showNetwork && (
           <View style={styles.rightActions}>
             <NetworkIndicator mode={networkMode} />
             <TouchableOpacity
-              style={styles.settingsBtn}
+              style={[styles.settingsBtn, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]}
               onPress={() => navigation.navigate('Account')}
               activeOpacity={0.7}
             >
@@ -59,9 +60,7 @@ export const Header: React.FC<HeaderProps> = ({
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: colors.background,
     borderBottomWidth: 1,
-    borderBottomColor: colors.borderLight,
   },
   content: {
     flexDirection: 'row',
@@ -82,12 +81,10 @@ const styles = StyleSheet.create({
   },
   logoText: {
     ...typography.h2,
-    color: colors.textPrimary,
     letterSpacing: -0.5,
   },
   title: {
     ...typography.h1,
-    color: colors.textPrimary,
   },
   rightActions: {
     flexDirection: 'row',
@@ -98,10 +95,8 @@ const styles = StyleSheet.create({
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: colors.surfaceElevated,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: colors.border,
   },
 });

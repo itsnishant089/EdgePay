@@ -5,7 +5,7 @@ import {
   Vibration,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
-import { colors, spacing, borderRadius, typography } from '../theme';
+import { useTheme, spacing, borderRadius, typography } from '../theme';
 import { PIN_LENGTH } from '../utils/constants';
 
 interface PinScreenProps {
@@ -22,6 +22,7 @@ const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '⌫'];
 export const PinScreen: React.FC<PinScreenProps> = ({
   visible, mode, title, subtitle, onComplete, onCancel,
 }) => {
+  const { colors } = useTheme();
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
   const shakeAnim = useRef(new Animated.Value(0)).current;
@@ -92,14 +93,14 @@ export const PinScreen: React.FC<PinScreenProps> = ({
         {/* Header */}
         <View style={s.header}>
           <TouchableOpacity onPress={onCancel} style={s.cancelBtn}>
-            <Text style={s.cancelText}>Cancel</Text>
+            <Text style={[s.cancelText, { color: colors.primary }]}>Cancel</Text>
           </TouchableOpacity>
         </View>
 
         {/* Title */}
         <View style={s.titleArea}>
-          <Text style={s.title}>{title || defaultTitle}</Text>
-          <Text style={s.subtitle}>
+          <Text style={[s.title, { color: '#FFF' }]}>{title || defaultTitle}</Text>
+          <Text style={[s.subtitle, { color: 'rgba(255,255,255,0.7)' }]}>
             {subtitle || (mode === 'set' ? 'Choose a 4-digit PIN for payments' : 'Enter your 4-digit payment PIN')}
           </Text>
         </View>
@@ -123,7 +124,7 @@ export const PinScreen: React.FC<PinScreenProps> = ({
           ))}
         </Animated.View>
 
-        {error ? <Text style={s.error}>{error}</Text> : <View style={{ height: 24 }} />}
+        {error ? <Text style={[s.error, { color: colors.error }]}>{error}</Text> : <View style={{ height: 24 }} />}
 
         {/* Keypad */}
         <View style={s.keypad}>
@@ -159,10 +160,10 @@ const s = StyleSheet.create({
   container: { flex: 1, paddingTop: 60 },
   header: { flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: spacing.xl },
   cancelBtn: { padding: spacing.md },
-  cancelText: { ...typography.body, color: colors.primary, fontWeight: '600' },
+  cancelText: { ...typography.body, fontWeight: '600' },
   titleArea: { alignItems: 'center', marginTop: spacing['3xl'], marginBottom: spacing['3xl'] },
-  title: { ...typography.h1, color: colors.textPrimary, marginBottom: spacing.sm },
-  subtitle: { ...typography.caption, color: colors.textTertiary, textAlign: 'center' },
+  title: { ...typography.h1, marginBottom: spacing.sm },
+  subtitle: { ...typography.caption, textAlign: 'center' },
   dotsRow: {
     flexDirection: 'row', justifyContent: 'center', gap: spacing.xl,
     marginBottom: spacing.lg,
@@ -171,7 +172,7 @@ const s = StyleSheet.create({
     width: 16, height: 16, borderRadius: 8,
     borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.2)',
   },
-  error: { ...typography.caption, color: colors.error, textAlign: 'center', marginBottom: spacing.sm },
+  error: { ...typography.caption, textAlign: 'center', marginBottom: spacing.sm },
   keypad: {
     flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center',
     paddingHorizontal: spacing['3xl'], gap: spacing.lg,
@@ -184,6 +185,6 @@ const s = StyleSheet.create({
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
   },
   keyHidden: { backgroundColor: 'transparent', borderWidth: 0 },
-  keyText: { fontSize: 28, fontWeight: '400', color: colors.textPrimary },
-  keyDeleteText: { fontSize: 24, color: colors.textSecondary },
+  keyText: { fontSize: 28, fontWeight: '400', color: '#FFF' },
+  keyDeleteText: { fontSize: 24, color: 'rgba(255,255,255,0.7)' },
 });

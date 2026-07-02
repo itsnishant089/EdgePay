@@ -30,15 +30,14 @@ object SmsPaymentParser {
     )
 
     private val CREDIT_KEYWORDS = listOf(
-        "CREDITED", "RECEIVED", "CREDIT", "DEPOSITED", "MONEY RECEIVED",
+        "CREDITED", "RECEIVED", "CREDIT ALERT", "CREDIT ALERT!", "DEPOSITED",
         "ADDED TO YOUR", "RECEIVED RS", "RECEIVED INR", "HAS BEEN CREDITED",
         "CREDITED TO", "CREDITED IN", "RECEIVED FROM", "RECEIVED PAYMENT",
-        " CR ", " CR."
     )
 
     private val DEBIT_KEYWORDS = listOf(
-        "DEBITED", "SENT RS", "PAID TO", "TRANSFERRED",
-        "DEDUCTED", "MONEY SENT", "WITHDRAWN", " DR ", " DR."
+        "DEBITED", "SENT RS", "SENT RS.", "PAID TO", "TRANSFERRED",
+        "DEDUCTED", "MONEY SENT", "WITHDRAWN", "FROM HDFC BANK"
     )
 
     private val EXCLUSION_KEYWORDS = listOf(
@@ -52,7 +51,8 @@ object SmsPaymentParser {
     private val FROM_PATTERN = Regex("""(?:from|by|sender|payee)\s+([A-Za-z0-9@._\s]{2,30}?)(?:\s+(?:on|at|ref|to|via|has|is|\.)|$)""", RegexOption.IGNORE_CASE)
     private val VPA_PATTERN = Regex("""VPA\s+([a-zA-Z0-9._]+@[a-zA-Z]+)""", RegexOption.IGNORE_CASE)
     private val GENERIC_FROM = Regex("""from\s+([^.,(]+)""", RegexOption.IGNORE_CASE)
-    private val REF_PATTERN = Regex("""(?:ref|txn|utr|imps)[\s.:#]*([A-Z0-9]{8,20})""", RegexOption.IGNORE_CASE)
+    private val TO_PATTERN = Regex("""\bTo\s+([A-Za-z0-9\s.&'-]+?)(?:\s+On|\s+Ref|\s+Not You|$)""", RegexOption.IGNORE_CASE)
+    private val REF_PATTERN = Regex("""(?:ref|txn|utr|imps|\(UPI\s+)([A-Z0-9]{6,20})""", RegexOption.IGNORE_CASE)
 
     fun parse(sender: String, body: String): PaymentInfo? {
         if (body.length < 10) return null
@@ -89,6 +89,7 @@ object SmsPaymentParser {
     }
 
     private fun extractSender(body: String): String {
+        TO_PATTERN.find(body)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
         FROM_PATTERN.find(body)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
         VPA_PATTERN.find(body)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
         GENERIC_FROM.find(body)?.groupValues?.get(1)?.trim()?.takeIf {

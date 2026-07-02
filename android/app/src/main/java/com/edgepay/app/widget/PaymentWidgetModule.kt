@@ -55,10 +55,49 @@ class PaymentWidgetModule(private val reactContext: ReactApplicationContext) :
             val intent = Intent(reactContext, PaymentWidgetService::class.java).apply {
                 action = PaymentWidgetService.ACTION_STOP
             }
-            reactContext.stopService(intent)
+            reactContext.startService(intent)
             promise.resolve(true)
         } catch (e: Exception) {
-            promise.reject("STOP_WIDGET_ERROR", "Failed to stop widget service: ${e.message}", e)
+            promise.reject("STOP_ERROR", e)
+        }
+    }
+
+    @ReactMethod
+    fun showQuickPayWidget(promise: Promise) {
+        try {
+            val intent = Intent(reactContext, PaymentWidgetService::class.java).apply {
+                action = PaymentWidgetService.ACTION_SHOW_QUICK_PAY
+            }
+            reactContext.startService(intent)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("QUICK_PAY_ERROR", e)
+        }
+    }
+
+    @ReactMethod
+    fun showFinanceWidget(promise: Promise) {
+        try {
+            val intent = Intent(reactContext, PaymentWidgetService::class.java).apply {
+                action = PaymentWidgetService.ACTION_SHOW_FINANCE
+            }
+            reactContext.startService(intent)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("FINANCE_ERROR", e)
+        }
+    }
+
+    @ReactMethod
+    fun hideFloatingWidgets(promise: Promise) {
+        try {
+            val intent = Intent(reactContext, PaymentWidgetService::class.java).apply {
+                action = PaymentWidgetService.ACTION_HIDE_WIDGETS
+            }
+            reactContext.startService(intent)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("HIDE_ERROR", e)
         }
     }
 
@@ -123,6 +162,34 @@ class PaymentWidgetModule(private val reactContext: ReactApplicationContext) :
             promise.resolve(true)
         } catch (e: Exception) {
             promise.reject("SYNC_EXPENSE_ERROR", e.message, e)
+        }
+    }
+
+    @ReactMethod
+    fun syncHomeWidget(walletBalance: Double, bankBalance: Double, lastTxLabel: String, promise: Promise) {
+        try {
+            EdgePayHomeWidget.syncHomeData(reactContext, walletBalance, bankBalance, lastTxLabel)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("SYNC_HOME_ERROR", e.message, e)
+        }
+    }
+
+    @ReactMethod
+    fun syncBalanceWidget(
+        walletBalance: Double,
+        bankBalance: Double,
+        todaySpent: Double,
+        lastTxLabel: String,
+        promise: Promise
+    ) {
+        try {
+            EdgePayBalanceWidget.syncBalanceData(
+                reactContext, walletBalance, bankBalance, todaySpent, lastTxLabel
+            )
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("SYNC_BALANCE_ERROR", e.message, e)
         }
     }
 

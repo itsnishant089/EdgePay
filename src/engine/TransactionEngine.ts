@@ -1,5 +1,6 @@
-// ─── Transaction Engine ──────────────────────────────────────────────
-// Core transaction processing: create, execute via USSD, and track transactions
+// ─── Transaction Engine 3.0 ──────────────────────────────────────────
+// Redesigned with proper state machine integration, timeout handling,
+// automatic recovery, structured logging, and zero-freeze guarantees.
 
 import type { Transaction, TransactionStatus, NetworkMode, SmsMessage } from '../types';
 import { generateTransactionId } from '../utils/formatters';
@@ -7,40 +8,50 @@ import { buildUssdCommand } from './USSDBuilder';
 import { sendUssdRequest, dialUssdCode } from './USSDService';
 import { onSmsReceived, readRecentSms } from './SmsService';
 import { parseSmsForTransaction, isBankSms, parseDemoSms } from './SmsParser';
+import { PaymentManager, PaymentState } from './PaymentManager';
 
-// Increased timeout: banks can take 15-30 seconds to send confirmation SMS
-const SMS_WAIT_TIMEOUT_MS = 120000; // 120 seconds as requested
-const SMS_POLL_INTERVAL_MS = 3000; // Poll inbox every 3 seconds
+const SMS_WAIT_TIMEOUT_MS = 120_000; // 2 minutes — auto-fail pending payments
+const SMS_POLL_INTERVAL_MS = 3000;
 
-/**
- * Validate transaction inputs before processing
- */
+// ─── Validation ─────────────────────────────────────────────────────
+
+export interface ValidationResult {
+  valid: boolean;
+  error?: string;
+  code?: 'INVALID_RECEIVER' | 'INVALID_AMOUNT' | 'LIMIT_EXCEEDED' | 'DUPLICATE' | 'ENGINE_BUSY';
+}
+
 export function validateTransaction(
   amount: number,
   receiver: string,
-  maxAmount: number
-): { valid: boolean; error?: string } {
+  maxAmount: number = 100000,
+  options?: { skipLockCheck?: boolean },
+): ValidationResult {
+  if (!options?.skipLockCheck && PaymentManager.isLocked()) {
+    return { valid: false, error: 'A payment is already in progress', code: 'ENGINE_BUSY' };
+  }
+
   if (!receiver || receiver.trim().length < 3) {
-    return { valid: false, error: 'Please enter a valid receiver' };
+    return { valid: false, error: 'Please enter a valid receiver', code: 'INVALID_RECEIVER' };
   }
   if (amount <= 0) {
-    return { valid: false, error: 'Amount must be greater than zero' };
+    return { valid: false, error: 'Amount must be greater than zero', code: 'INVALID_AMOUNT' };
   }
   if (amount > maxAmount) {
-    return { valid: false, error: `Limit exceeded` };
+    return { valid: false, error: `Amount exceeds ₹${maxAmount} limit`, code: 'LIMIT_EXCEEDED' };
   }
   return { valid: true };
 }
 
-/**
- * Create a new transaction object
- */
+// ─── Transaction Creation ───────────────────────────────────────────
+
 export function createTransaction(
   amount: number,
   receiver: string,
   receiverName?: string,
   mode: NetworkMode = 'GSM',
-  method: 'USSD' | 'WALLET' = 'USSD'
+  method: 'USSD' | 'WALLET' | 'ONLINE' = 'USSD',
+  action: 'PAY' | 'REQUEST' = 'PAY',
 ): Transaction {
   const ussdCommand = method === 'USSD' ? buildUssdCommand(receiver.trim(), amount) : undefined;
   return {
@@ -48,7 +59,8 @@ export function createTransaction(
     amount,
     receiver: receiver.trim(),
     receiverName: receiverName?.trim(),
-    method: method,
+    method,
+    action,
     status: 'PENDING',
     timestamp: Date.now(),
     retryCount: 0,
@@ -56,59 +68,89 @@ export function createTransaction(
   };
 }
 
-/**
- * Execute a transaction via USSD — then confirm via SMS
- * Two-phase confirmation:
- * 1. Real-time SMS listener (catches bank SMS as they arrive)
- * 2. Polling inbox fallback (reads recent SMS every 5s to catch messages
- *    that arrived while the system USSD menu was active)
- */
+// ─── USSD Execution (with state machine) ────────────────────────────
+
 export async function executeUssdTransaction(
   transaction: Transaction,
   onStatusUpdate: (id: string, status: TransactionStatus, message?: string) => void
 ): Promise<Transaction> {
+  // Acquire lock — prevents duplicate payments
+  if (!PaymentManager.acquireLock(transaction.id)) {
+    onStatusUpdate(transaction.id, 'FAILED', 'Another payment is in progress');
+    return { ...transaction, status: 'FAILED' };
+  }
+
+  // Persist to recover from crash
+  await PaymentManager.persistPendingPayment(transaction);
+
   const ussdCommand = buildUssdCommand(transaction.receiver, transaction.amount);
-  const updatedTxn = { ...transaction, ussdCommand, status: 'SENT' as TransactionStatus };
+  let updatedTxn = { ...transaction, ussdCommand, status: 'SENT' as TransactionStatus };
   const txnStartTime = Date.now();
 
   try {
-    onStatusUpdate(transaction.id, 'SENT', 'Dialing...');
+    // ── VALIDATING ──
+    PaymentManager.transition('VALIDATING', 'Validating payment details');
+    onStatusUpdate(transaction.id, 'PENDING', 'Validating...');
 
-    try {
-      // Try direct USSD request first (modern Android)
-      const result = await sendUssdRequest(ussdCommand);
-      if (result.status === 'SUCCESS') {
-        onStatusUpdate(transaction.id, 'PENDING', 'Waiting for Bank Confirmation...');
-      }
-    } catch (ussdError: any) {
-      // Fallback to dialer (standard Android)
-      onStatusUpdate(transaction.id, 'SENT', 'Initiating dialer...');
-      await dialUssdCode(ussdCommand);
+    const validation = validateTransaction(transaction.amount, transaction.receiver, 100000, { skipLockCheck: true });
+    if (!validation.valid) {
+      PaymentManager.transition('FAILED', validation.error || 'Validation failed');
+      PaymentManager.releaseLock();
+      onStatusUpdate(transaction.id, 'FAILED', validation.error);
+      return { ...updatedTxn, status: 'FAILED' };
     }
 
-    // Phase: Wait for bank confirmation via SMS
+    // ── PREPARING ──
+    PaymentManager.transition('PREPARING', 'Building USSD command');
+    onStatusUpdate(transaction.id, 'PENDING', 'Preparing payment...');
+
+    // ── PROCESSING ──
+    PaymentManager.transition('PROCESSING', 'Dialing USSD');
+    onStatusUpdate(transaction.id, 'SENT', 'Opening USSD dialer...');
+    await dialUssdCode(ussdCommand);
+
+    // ── WAITING CONFIRMATION ──
+    PaymentManager.transition('WAITING_CONFIRMATION', 'Awaiting SMS confirmation');
     onStatusUpdate(transaction.id, 'PENDING', 'Awaiting SMS Confirmation...');
 
+    // Start timeout
+    PaymentManager.startTimeout(() => {
+      if (PaymentManager.getState() === 'WAITING_CONFIRMATION') {
+        PaymentManager.transition('TIMEOUT', 'Bank confirmation timed out');
+        onStatusUpdate(transaction.id, 'FAILED', 'Confirmation timed out. Check your bank app.');
+      }
+    }, SMS_WAIT_TIMEOUT_MS);
+
     const smsResult = await waitForBankConfirmation(transaction, txnStartTime);
+
     if (smsResult === 'SUCCESS') {
+      PaymentManager.transition('SUCCESS', 'Payment confirmed via SMS');
       onStatusUpdate(transaction.id, 'SUCCESS', 'Payment Completed!');
       return { ...updatedTxn, status: 'SUCCESS' };
     }
 
+    // Check if timeout already fired
+    if (PaymentManager.getState() === 'TIMEOUT') {
+      onStatusUpdate(transaction.id, 'FAILED', 'Confirmation timed out');
+      return { ...updatedTxn, status: 'FAILED' };
+    }
+
+    PaymentManager.transition('FAILED', 'No confirmation received');
+    PaymentManager.releaseLock();
     onStatusUpdate(transaction.id, 'FAILED', 'No confirmation received.');
     return { ...updatedTxn, status: 'FAILED' };
+
   } catch (error: any) {
-    onStatusUpdate(transaction.id, 'FAILED', 'Transaction failed.');
+    const errorMsg = error?.message || 'Transaction failed';
+    PaymentManager.transition('FAILED', `Error: ${errorMsg}`);
+    PaymentManager.releaseLock();
+    onStatusUpdate(transaction.id, 'FAILED', 'Transaction failed. Please retry.');
     return { ...updatedTxn, status: 'FAILED' };
   }
 }
 
-/**
- * Wait for bank confirmation using BOTH real-time listener AND inbox polling.
- * This solves the issue where the bank sends a debit SMS while the USSD
- * system menu is active — the BroadcastReceiver may miss it, but reading
- * the inbox directly will always find it.
- */
+// ─── SMS Confirmation Listener ──────────────────────────────────────
+
 function waitForBankConfirmation(
   transaction: Transaction,
   txnStartTime: number
@@ -140,12 +182,11 @@ function waitForBankConfirmation(
       }
     });
 
-    // Method 2: Poll SMS inbox every 5 seconds
+    // Method 2: Poll SMS inbox
     const pollTimer = setInterval(async () => {
       try {
         const recentMessages = await readRecentSms(15);
         for (const sms of recentMessages) {
-          // Only check messages that arrived AFTER the transaction started
           if (sms.timestamp >= txnStartTime - 5000) {
             if (isBankSms(sms.sender)) {
               const result = parseSmsForTransaction(sms);
@@ -161,46 +202,57 @@ function waitForBankConfirmation(
             }
           }
         }
-      } catch (err) {
-        // Silently continue polling
+      } catch (_) {
+        // Continue polling silently
       }
     }, SMS_POLL_INTERVAL_MS);
 
-    // Timeout: auto-fail after 45 seconds
+    // Timeout fallback
     const timeoutTimer = setTimeout(() => {
       finish('FAILED');
     }, SMS_WAIT_TIMEOUT_MS);
   });
 }
 
-/**
- * Execute a simulated WALLET transaction
- */
+// ─── Wallet Transaction (simulated) ────────────────────────────────
+
 export async function executeWalletTransaction(
   transaction: Transaction,
   onStatusUpdate: (id: string, status: TransactionStatus, message?: string) => void
 ): Promise<Transaction> {
+  if (!PaymentManager.acquireLock(transaction.id)) {
+    onStatusUpdate(transaction.id, 'FAILED', 'Another payment is in progress');
+    return { ...transaction, status: 'FAILED' };
+  }
+
+  await PaymentManager.persistPendingPayment(transaction);
   const updatedTxn = { ...transaction, status: 'SENT' as TransactionStatus };
-  
+
   try {
-    onStatusUpdate(transaction.id, 'SENT', 'Initiating secure wallet transfer...');
-    
-    // Simulate network delay
-    await new Promise<void>(r => setTimeout(() => r(), 1200));
+    PaymentManager.transition('VALIDATING', 'Wallet payment validation');
+    onStatusUpdate(transaction.id, 'SENT', 'Connecting to Edge Wallet...');
+
+    PaymentManager.transition('PREPARING', 'Preparing wallet transfer');
+    await new Promise<void>(r => setTimeout(r, 1200));
     onStatusUpdate(transaction.id, 'PENDING', 'Verifying UPI credentials...');
-    
-    await new Promise<void>(r => setTimeout(() => r(), 1500));
+
+    PaymentManager.transition('PROCESSING', 'Processing wallet payment');
+    await new Promise<void>(r => setTimeout(r, 1500));
     onStatusUpdate(transaction.id, 'SENT', 'Securing transaction bridge...');
-    
-    await new Promise<void>(r => setTimeout(() => r(), 1800));
+
+    PaymentManager.transition('WAITING_CONFIRMATION', 'Waiting for wallet response');
+    await new Promise<void>(r => setTimeout(r, 1800));
     onStatusUpdate(transaction.id, 'SENT', 'Waiting for wallet response...');
-    
-    await new Promise<void>(r => setTimeout(() => r(), 1500));
+
+    await new Promise<void>(r => setTimeout(r, 1500));
+
+    PaymentManager.transition('SUCCESS', 'Wallet payment completed');
     onStatusUpdate(transaction.id, 'SUCCESS', 'Payment processed successfully!');
-    
     return { ...updatedTxn, status: 'SUCCESS' };
+
   } catch (error) {
-    onStatusUpdate(transaction.id, 'FAILED', 'Wallet transaction failed.');
+    PaymentManager.transition('FAILED', 'Wallet transaction failed');
+    onStatusUpdate(transaction.id, 'FAILED', 'Wallet transfer failed.');
     return { ...updatedTxn, status: 'FAILED' };
   }
 }

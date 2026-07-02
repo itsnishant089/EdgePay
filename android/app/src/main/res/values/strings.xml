@@ -3,4 +3,5 @@
     <string name="widget_description">Shows recent offline payments and service status.</string>
     <string name="goal_widget_description">Track your monthly spending goal and progress.</string>
     <string name="expense_widget_description">Daily expense tracking with auto-renewal.</string>
+    <string name="balance_widget_description">Wallet and bank balance at a glance — resize for more detail.</string>
 </resources>

@@ -1,20 +1,21 @@
 package com.edgepay.app.widget
 
+import android.animation.AnimatorSet
+import android.animation.ObjectAnimator
 import android.app.*
 import android.content.*
-import android.graphics.*
+import android.graphics.PixelFormat
 import android.os.*
 import android.provider.Telephony
 import android.speech.tts.TextToSpeech
-import android.telephony.SmsMessage
-import android.util.DisplayMetrics
 import android.view.*
 import android.widget.*
 import androidx.core.app.NotificationCompat
 import com.edgepay.app.MainActivity
 import com.edgepay.app.R
-import java.text.NumberFormat
+import com.edgepay.app.EdgePayAppLifecycle
 import java.util.*
+import android.view.animation.OvershootInterpolator
 
 class PaymentWidgetService : Service(), TextToSpeech.OnInitListener {
 
@@ -22,7 +23,10 @@ class PaymentWidgetService : Service(), TextToSpeech.OnInitListener {
         const val CHANNEL_ID = "edgepay_widget_channel"
         const val NOTIFICATION_ID = 8001
         const val ACTION_STOP = "com.edgepay.app.widget.STOP"
-        const val ACTION_DISMISS_OVERLAY = "com.edgepay.app.widget.DISMISS"
+        const val ACTION_SHOW_QUICK_PAY = "com.edgepay.app.widget.SHOW_QUICK_PAY"
+        const val ACTION_SHOW_FINANCE = "com.edgepay.app.widget.SHOW_FINANCE"
+        const val ACTION_HIDE_WIDGETS = "com.edgepay.app.widget.HIDE_WIDGETS"
+        
         const val EXTRA_LANGUAGE = "language"
         const val EXTRA_ANNOUNCE_CREDITS = "announceCredits"
         const val EXTRA_ANNOUNCE_DEBITS = "announceDebits"
@@ -30,33 +34,24 @@ class PaymentWidgetService : Service(), TextToSpeech.OnInitListener {
         var isRunning = false
     }
 
-    // ── TTS ─────────────────────────────────────────────────────────
     private var tts: TextToSpeech? = null
     private var ttsReady = false
-
-    // ── SMS Receiver ─────────────────────────────────────────────────
     private var smsReceiver: BroadcastReceiver? = null
 
-    // ── Overlay Widget ───────────────────────────────────────────────
     private var windowManager: WindowManager? = null
-    private var overlayView: View? = null
+    
+    // The three overlays
+    private var soundboxView: View? = null
+    private var quickPayView: View? = null
+    private var financeView: View? = null
+
     private var overlayHandler: Handler? = null
     private var dismissRunnable: Runnable? = null
 
-    // ── Config ───────────────────────────────────────────────────────
     private var language = "en"
     private var announceCredits = true
     private var announceDebits = false
-
-    // ── Recent announcements (dedup 30s) ─────────────────────────────
     private val recentKeys = ArrayDeque<Pair<String, Long>>()
-    
-    // ── History of payments for widget ──────────────────────────────
-    private val sessionPayments = mutableListOf<PaymentInfo>()
-
-    // ─────────────────────────────────────────────────────────────────
-    // Lifecycle
-    // ─────────────────────────────────────────────────────────────────
 
     override fun onCreate() {
         super.onCreate()
@@ -69,9 +64,23 @@ class PaymentWidgetService : Service(), TextToSpeech.OnInitListener {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            stopSelf()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_STOP -> {
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_SHOW_QUICK_PAY -> {
+                showQuickPayWidget()
+                return START_STICKY
+            }
+            ACTION_SHOW_FINANCE -> {
+                showFinanceWidget()
+                return START_STICKY
+            }
+            ACTION_HIDE_WIDGETS -> {
+                hideAllWidgets()
+                return START_STICKY
+            }
         }
 
         language = intent?.getStringExtra(EXTRA_LANGUAGE) ?: language
@@ -88,15 +97,11 @@ class PaymentWidgetService : Service(), TextToSpeech.OnInitListener {
         super.onDestroy()
         isRunning = false
         unregisterSmsReceiver()
-        removeOverlay()
+        hideAllWidgets()
         tts?.stop()
         tts?.shutdown()
         overlayHandler?.removeCallbacksAndMessages(null)
     }
-
-    // ─────────────────────────────────────────────────────────────────
-    // TTS init
-    // ─────────────────────────────────────────────────────────────────
 
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
@@ -106,14 +111,9 @@ class PaymentWidgetService : Service(), TextToSpeech.OnInitListener {
                 tts?.setLanguage(Locale.ENGLISH)
             }
             tts?.setSpeechRate(0.9f)
-            tts?.setPitch(1.0f)
             ttsReady = true
         }
     }
-
-    // ─────────────────────────────────────────────────────────────────
-    // SMS Receiver
-    // ─────────────────────────────────────────────────────────────────
 
     private fun registerSmsReceiver() {
         smsReceiver = object : BroadcastReceiver() {
@@ -121,16 +121,12 @@ class PaymentWidgetService : Service(), TextToSpeech.OnInitListener {
                 if (intent?.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) return
                 val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
                 for (msg in messages) {
-                    val sender = msg.displayOriginatingAddress ?: ""
-                    val body = msg.displayMessageBody ?: ""
-                    processIncomingSms(sender, body)
+                    processIncomingSms(msg.displayOriginatingAddress ?: "", msg.displayMessageBody ?: "")
                 }
             }
         }
-
         val filter = IntentFilter(Telephony.Sms.Intents.SMS_RECEIVED_ACTION)
         filter.priority = IntentFilter.SYSTEM_HIGH_PRIORITY
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(smsReceiver, filter, RECEIVER_NOT_EXPORTED)
         } else {
@@ -145,235 +141,170 @@ class PaymentWidgetService : Service(), TextToSpeech.OnInitListener {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────
-    // Payment Detection & Announcement
-    // ─────────────────────────────────────────────────────────────────
-
     private fun processIncomingSms(sender: String, body: String) {
         val info = SmsPaymentParser.parse(sender, body) ?: return
-
-        // Dedup within 30 seconds
-        val key = "${info.type}_${info.amount}_${info.sender}"
+        val key = "${info.type}_${info.amount}_${info.sender}_${info.refNumber ?: ""}"
         val now = System.currentTimeMillis()
-        recentKeys.removeAll { now - it.second > 30_000 }
+        recentKeys.removeAll { now - it.second > 60_000 }
         if (recentKeys.any { it.first == key }) return
         recentKeys.addLast(key to now)
 
-        // Check type filter
-        if (info.type == "CREDIT" && !announceCredits) return
-        if (info.type == "DEBIT" && !announceDebits) return
-
-        // Show overlay on main thread
+        // Always store last payment for home widget
         overlayHandler?.post {
-            showOverlayWidget(info)
+            EdgePayHomeWidget.updateLastPayment(this, info.amount.toInt(), info.sender, info.type, info.bank)
+        }
+
+        // When React is in foreground, JS soundbox handles TTS + wallet — avoid duplicate voice
+        if (EdgePayAppLifecycle.isForeground) return
+
+        // Only announce and show overlay for credits when app is backgrounded
+        if (info.type != "CREDIT") return
+        if (!announceCredits) return
+
+        overlayHandler?.post {
+            showSoundboxWidget(info)
             announcePayment(info)
-            EdgePayHomeWidget.updateLastPayment(this, info.amount, info.sender, info.type, info.bank)
         }
     }
 
     private fun announcePayment(info: PaymentInfo) {
-        if (!ttsReady) return
-        val text = buildAnnouncementText(info)
+        if (!ttsReady || info.type != "CREDIT") return
+        val rupees = info.amount.toInt()
+        val paise = Math.round((info.amount - rupees) * 100)
+        val amountSpeech = if (paise > 0) "$rupees rupees and $paise paise" else "$rupees rupees"
+        val text = if (language == "hi") {
+            "क्रेडिट अलर्ट। $amountSpeech प्राप्त हुए।"
+        } else {
+            "Credit alert. $amountSpeech credited."
+        }
         tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "edgepay_payment")
     }
 
-    private fun buildAnnouncementText(info: PaymentInfo): String {
-        val formatted = formatAmount(info.amount)
-        return if (language == "hi") {
-            if (info.type == "CREDIT") {
-                val from = if (info.sender.isNotEmpty()) " ${info.sender} से" else ""
-                "EdgePay। भुगतान प्राप्त हुआ। $formatted रुपये$from।"
-            } else {
-                val to = if (info.sender.isNotEmpty()) " ${info.sender} को" else ""
-                "EdgePay। भुगतान भेजा गया। $formatted रुपये$to।"
-            }
-        } else {
-            if (info.type == "CREDIT") {
-                val from = if (info.sender.isNotEmpty()) " from ${info.sender}" else ""
-                "EdgePay. Payment received. $formatted rupees$from."
-            } else {
-                val to = if (info.sender.isNotEmpty()) " to ${info.sender}" else ""
-                "EdgePay. Payment sent. $formatted rupees$to."
-            }
-        }
-    }
+    // ── Overlays ───────────────────────────────────────────────────
 
-    private fun formatAmount(amount: Double): String {
-        return if (amount == Math.floor(amount)) {
-            amount.toInt().toString()
-        } else {
-            String.format("%.2f", amount)
-        }
-    }
-
-    // ─────────────────────────────────────────────────────────────────
-    // Overlay Widget
-    // ─────────────────────────────────────────────────────────────────
-
-    private fun showOverlayWidget(info: PaymentInfo) {
-        // Add to history (keep recent 10 max)
-        sessionPayments.add(0, info)
-        if (sessionPayments.size > 10) sessionPayments.removeLast()
-
-        val wm = windowManager ?: return
-
-        // If overlay view exists, just update the layout to avoid screen flashing
-        if (overlayView != null) {
-            updateOverlayData()
-            return
-        }
-
-        val inflater = LayoutInflater.from(this)
-        val view = inflater.inflate(R.layout.widget_payment_overlay, null)
-
-        val btnDismiss = view.findViewById<TextView>(R.id.widget_dismiss)
-        btnDismiss.setOnClickListener { removeOverlay() }
-
-        // Open app on widget tap
-        view.findViewById<View>(R.id.widget_open_app).setOnClickListener {
-            val launchIntent = Intent(this, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            }
-            startActivity(launchIntent)
-            removeOverlay()
-        }
-
-        // Window layout params
+    private fun getOverlayLayoutParams(): WindowManager.LayoutParams {
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         } else {
-            @Suppress("DEPRECATION")
             WindowManager.LayoutParams.TYPE_PHONE
         }
-
-        val params = WindowManager.LayoutParams(
+        return WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             type,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED,
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            y = 120  // offset from top a bit lower so it looks like a drop-down widget
-        }
-
-        // Make draggable
-        view.setOnTouchListener(object : View.OnTouchListener {
-            private var initX = 0; private var initY = 0
-            private var initTouchX = 0f; private var initTouchY = 0f
-            override fun onTouch(v: View, event: MotionEvent): Boolean {
-                when (event.action) {
-                    MotionEvent.ACTION_DOWN -> {
-                        initX = params.x; initY = params.y
-                        initTouchX = event.rawX; initTouchY = event.rawY
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        params.x = initX + (event.rawX - initTouchX).toInt()
-                        params.y = initY + (event.rawY - initTouchY).toInt()
-                        wm.updateViewLayout(view, params)
-                    }
-                    MotionEvent.ACTION_UP -> {
-                        val dx = Math.abs(event.rawX - initTouchX)
-                        val dy = Math.abs(event.rawY - initTouchY)
-                        if (dx < 10 && dy < 10) v.performClick()
-                    }
-                }
-                return true
-            }
-        })
-
-        overlayView = view
-        wm.addView(view, params)
-        updateOverlayData()
-    }
-
-    private fun updateOverlayData() {
-        val view = overlayView ?: return
-        val inflater = LayoutInflater.from(this)
-        val container = view.findViewById<LinearLayout>(R.id.history_list)
-        container.removeAllViews()
-
-        for (itemInfo in sessionPayments) {
-            val itemView = inflater.inflate(R.layout.widget_payment_item, container, false)
-            val isCredit = itemInfo.type == "CREDIT"
-            
-            val tvType = itemView.findViewById<TextView>(R.id.item_type)
-            val tvAmount = itemView.findViewById<TextView>(R.id.item_amount)
-            val tvSender = itemView.findViewById<TextView>(R.id.item_sender)
-            val tvBank = itemView.findViewById<TextView>(R.id.item_bank)
-
-            tvType.text = if (isCredit) "⬇ Received" else "⬆ Sent"
-            tvType.setTextColor(if (isCredit) 0xFF30D158.toInt() else 0xFFFF453A.toInt())
-            
-            tvAmount.text = "₹${itemInfo.amount.let { if (it == Math.floor(it)) it.toInt().toString() else String.format("%.2f", it) }}"
-            tvAmount.setTextColor(if (isCredit) 0xFF30D158.toInt() else 0xFFFF453A.toInt())
-            
-            tvSender.text = if (itemInfo.sender.isNotEmpty()) itemInfo.sender else itemInfo.bank
-            tvBank.text = itemInfo.bank
-            
-            container.addView(itemView)
-            
-            // Add a small divider between items
-            val divider = View(this).apply {
-                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1).apply {
-                    setMargins(0, 8, 0, 8)
-                }
-                setBackgroundColor(0x18FFFFFF)
-            }
-            container.addView(divider)
+            y = 100
         }
     }
 
-    private fun removeOverlay() {
+    private fun animateEntrance(view: View) {
+        view.alpha = 0f
+        view.scaleX = 0.8f
+        view.scaleY = 0.8f
+        view.animate()
+            .alpha(1f)
+            .scaleX(1f)
+            .scaleY(1f)
+            .setDuration(300)
+            .setInterpolator(OvershootInterpolator())
+            .start()
+    }
+
+    private fun hideAllWidgets() {
+        soundboxView?.let { windowManager?.removeView(it); soundboxView = null }
+        quickPayView?.let { windowManager?.removeView(it); quickPayView = null }
+        financeView?.let { windowManager?.removeView(it); financeView = null }
+    }
+
+    private fun showSoundboxWidget(info: PaymentInfo) {
+        hideAllWidgets()
+        val inflater = getSystemService(LAYOUT_INFLATER_SERVICE) as LayoutInflater
+        soundboxView = inflater.inflate(R.layout.widget_floating_soundbox, null)
+        
+        soundboxView?.findViewById<TextView>(R.id.text_amount)?.text = "₹${info.amount}"
+        soundboxView?.findViewById<TextView>(R.id.text_sender)?.text = "From ${info.sender}"
+        soundboxView?.findViewById<LinearLayout>(R.id.payment_details_container)?.visibility = View.VISIBLE
+        
+        soundboxView?.findViewById<ImageView>(R.id.btn_close)?.setOnClickListener {
+            hideAllWidgets()
+        }
+
+        windowManager?.addView(soundboxView, getOverlayLayoutParams())
+        soundboxView?.let { animateEntrance(it) }
+
+        // Auto dismiss
         dismissRunnable?.let { overlayHandler?.removeCallbacks(it) }
-        dismissRunnable = null
-        overlayView?.let {
-            try { windowManager?.removeView(it) } catch (_: Exception) {}
-            overlayView = null
-        }
+        dismissRunnable = Runnable { hideAllWidgets() }
+        overlayHandler?.postDelayed(dismissRunnable!!, 5000)
     }
 
-    // ─────────────────────────────────────────────────────────────────
-    // Notification & Channel
-    // ─────────────────────────────────────────────────────────────────
+    private fun showQuickPayWidget() {
+        hideAllWidgets()
+        val inflater = getSystemService(LAYOUT_INFLATER_SERVICE) as LayoutInflater
+        quickPayView = inflater.inflate(R.layout.widget_quick_pay, null)
+        
+        quickPayView?.findViewById<ImageView>(R.id.btn_close)?.setOnClickListener {
+            hideAllWidgets()
+        }
+        quickPayView?.findViewById<Button>(R.id.btn_scan)?.setOnClickListener {
+            openAppTo("QRScan")
+        }
+
+        windowManager?.addView(quickPayView, getOverlayLayoutParams())
+        quickPayView?.let { animateEntrance(it) }
+    }
+
+    private fun showFinanceWidget() {
+        hideAllWidgets()
+        val inflater = getSystemService(LAYOUT_INFLATER_SERVICE) as LayoutInflater
+        financeView = inflater.inflate(R.layout.widget_finance_dashboard, null)
+        
+        financeView?.findViewById<ImageView>(R.id.btn_close)?.setOnClickListener {
+            hideAllWidgets()
+        }
+        
+        // Populate dummy data for now or fetch from SharedPreferences
+        val prefs = getSharedPreferences("edgepay_widget", Context.MODE_PRIVATE)
+        val balance = prefs.getFloat("balance", 0f)
+        financeView?.findViewById<TextView>(R.id.text_balance)?.text = "₹$balance"
+
+        windowManager?.addView(financeView, getOverlayLayoutParams())
+        financeView?.let { animateEntrance(it) }
+    }
+
+    private fun openAppTo(screen: String) {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            putExtra("targetScreen", screen)
+        }
+        startActivity(intent)
+        hideAllWidgets()
+    }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "EdgePay Payment Monitor",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Monitors incoming payments and announces them"
-                setShowBadge(false)
-            }
+            val channel = NotificationChannel(CHANNEL_ID, "EdgePay Widget", NotificationManager.IMPORTANCE_LOW)
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)
         }
     }
 
     private fun buildNotification(): Notification {
-        val openIntent = PendingIntent.getActivity(
-            this, 0,
-            Intent(this, MainActivity::class.java),
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE
         )
-        val stopIntent = PendingIntent.getService(
-            this, 0,
-            Intent(this, PaymentWidgetService::class.java).apply { action = ACTION_STOP },
-            PendingIntent.FLAG_IMMUTABLE
-        )
-
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("EdgePay Active")
-            .setContentText("Monitoring payments • Tap to open")
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setOngoing(true)
-            .setSilent(true)
-            .setContentIntent(openIntent)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop", stopIntent)
+            .setContentTitle("EdgePay Widget Active")
+            .setContentText("Listening for payments...")
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentIntent(pendingIntent)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
     }
 }

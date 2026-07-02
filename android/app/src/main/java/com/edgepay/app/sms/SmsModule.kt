@@ -20,7 +20,6 @@ import com.facebook.react.modules.core.PermissionListener
 class SmsModule(reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext), PermissionListener {
 
-    private var smsReceiver: BroadcastReceiver? = null
     private var permissionPromise: Promise? = null
 
     companion object {
@@ -81,38 +80,11 @@ class SmsModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun startSmsListener(promise: Promise) {
         try {
-            if (smsReceiver != null) {
-                promise.resolve("Listener already active")
-                return
-            }
-
-            smsReceiver = object : BroadcastReceiver() {
-                override fun onReceive(context: Context?, intent: Intent?) {
-                    if (intent?.action == Telephony.Sms.Intents.SMS_RECEIVED_ACTION) {
-                        val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
-                        for (smsMessage in messages) {
-                            val smsData = Arguments.createMap().apply {
-                                putString("sender", smsMessage.displayOriginatingAddress)
-                                putString("body", smsMessage.displayMessageBody)
-                                putDouble("timestamp", smsMessage.timestampMillis.toDouble())
-                            }
-                            sendEvent(SMS_RECEIVED_EVENT, smsData)
-                        }
-                    }
-                }
-            }
-
-            val filter = IntentFilter(Telephony.Sms.Intents.SMS_RECEIVED_ACTION)
-            filter.priority = IntentFilter.SYSTEM_HIGH_PRIORITY
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                reactApplicationContext.registerReceiver(
-                    smsReceiver,
-                    filter,
-                    Context.RECEIVER_NOT_EXPORTED
-                )
+            val intent = Intent(reactApplicationContext, SoundboxService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                reactApplicationContext.startForegroundService(intent)
             } else {
-                reactApplicationContext.registerReceiver(smsReceiver, filter)
+                reactApplicationContext.startService(intent)
             }
 
             promise.resolve("SMS listener started")
@@ -124,10 +96,8 @@ class SmsModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun stopSmsListener(promise: Promise) {
         try {
-            smsReceiver?.let {
-                reactApplicationContext.unregisterReceiver(it)
-                smsReceiver = null
-            }
+            val intent = Intent(reactApplicationContext, SoundboxService::class.java)
+            reactApplicationContext.stopService(intent)
             promise.resolve("SMS listener stopped")
         } catch (e: Exception) {
             promise.reject("LISTENER_ERROR", "Failed to stop SMS listener: ${e.message}", e)
@@ -260,11 +230,5 @@ class SmsModule(reactContext: ReactApplicationContext) :
 
     override fun onCatalystInstanceDestroy() {
         super.onCatalystInstanceDestroy()
-        smsReceiver?.let {
-            try {
-                reactApplicationContext.unregisterReceiver(it)
-            } catch (_: Exception) {}
-            smsReceiver = null
-        }
     }
 }

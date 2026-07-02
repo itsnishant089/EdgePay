@@ -1,15 +1,13 @@
-// ─── QR Scan Screen ──────────────────────────────────────────────────
-// Scans UPI QR codes via camera, gallery upload, or manual input
-// and converts them to USSD commands
+// ─── QR Scan Screen 3.0 ──────────────────────────────────────────────
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Animated,
-  TextInput, Alert, Dimensions, Linking, Platform,
-  ActivityIndicator,
+  Alert, Dimensions, Platform, AppState
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useIsFocused, useFocusEffect } from '@react-navigation/native';
 import {
   Camera, useCameraDevice, useCameraPermission, useCodeScanner,
 } from 'react-native-vision-camera';
@@ -17,298 +15,275 @@ import { launchImageLibrary } from 'react-native-image-picker';
 import RNQRGenerator from 'rn-qr-generator';
 import LinearGradient from 'react-native-linear-gradient';
 import { parseUPIQR, validateQRData, getReceiverFromQR } from '../utils/qrParser';
-import { formatCurrency } from '../utils/formatters';
 import { useStore } from '../store/useStore';
 import { translations } from '../utils/i18n';
-import { useTheme, spacing, borderRadius, typography, shadows } from '../theme';
+import { useTheme, spacing } from '../theme';
 import type { QRPaymentData } from '../types';
 
-const SCANNER_SIZE = Dimensions.get('window').width * 0.7;
+const { width, height } = Dimensions.get('window');
+const SCANNER_SIZE = width * 0.75;
 
 export const QRScanScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
   const insets = useSafeAreaInsets();
-  const { colors, theme } = useTheme();
+  const { colors } = useTheme();
   const { language } = useStore();
   const t = translations[language] || translations.en;
   
-  const [manualInput, setManualInput] = useState('');
-  const [scannedData, setScannedData] = useState<QRPaymentData | null>(null);
-  const [showManual, setShowManual] = useState(false);
   const [isCameraActive, setIsCameraActive] = useState(true);
-  const [isProcessingGallery, setIsProcessingGallery] = useState(false);
+  const [torchOn, setTorchOn] = useState(false);
+  const scanLock = useRef(false);
   const scanLineAnim = useRef(new Animated.Value(0)).current;
 
-  // Camera setup
   const { hasPermission, requestPermission } = useCameraPermission();
   const device = useCameraDevice('back');
+  
+  const isFocused = useIsFocused();
+  
+  // Track App State
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', nextAppState => {
+      if (nextAppState === 'active' && isFocused) {
+        setIsCameraActive(true);
+      } else {
+        setIsCameraActive(false);
+      }
+    });
+    return () => subscription.remove();
+  }, [isFocused]);
+
+  useEffect(() => {
+    setIsCameraActive(isFocused);
+    if (isFocused) {
+      scanLock.current = false;
+    }
+  }, [isFocused]);
+
+  useFocusEffect(
+    useCallback(() => {
+      scanLock.current = false;
+      setIsCameraActive(true);
+    }, []),
+  );
 
   useEffect(() => { if (!hasPermission) requestPermission(); }, [hasPermission]);
 
   useEffect(() => {
+    if (!isFocused) {
+      scanLineAnim.stopAnimation();
+      return;
+    }
     const anim = Animated.loop(Animated.sequence([
-      Animated.timing(scanLineAnim, { toValue: 1, duration: 2000, useNativeDriver: true }),
-      Animated.timing(scanLineAnim, { toValue: 0, duration: 2000, useNativeDriver: true }),
+      Animated.timing(scanLineAnim, { toValue: 1, duration: 2500, useNativeDriver: true }),
+      Animated.timing(scanLineAnim, { toValue: 0, duration: 2500, useNativeDriver: true }),
     ]));
     anim.start();
     return () => anim.stop();
-  }, []);
+  }, [isFocused]);
+
+  const processQRValue = useCallback((qrValue: string) => {
+    if (scanLock.current) return;
+    scanLock.current = true;
+    setIsCameraActive(false);
+
+    const parsed = parseUPIQR(qrValue);
+    const validation = validateQRData(parsed);
+    if (validation.valid && parsed) {
+      const { receiver, name } = getReceiverFromQR(parsed);
+      navigation.navigate('SendMoney', {
+        receiver,
+        name: parsed.name || name,
+        amount: parsed.amount,
+        note: parsed.note,
+        mode: 'pay',
+      });
+    } else {
+      scanLock.current = false;
+      setIsCameraActive(true);
+      Alert.alert('Invalid QR', validation.error || 'Could not parse UPI data from image');
+    }
+  }, [navigation]);
 
   const codeScanner = useCodeScanner({
     codeTypes: ['qr'],
     onCodeScanned: useCallback((codes) => {
-      if (codes.length > 0 && codes[0].value && !scannedData) {
-        const qrValue = codes[0].value;
-        processQRValue(qrValue);
+      if (scanLock.current || !isCameraActive) return;
+      if (codes.length > 0 && codes[0].value) {
+        processQRValue(codes[0].value);
       }
-    }, [scannedData]),
+    }, [isCameraActive, processQRValue]),
   });
 
-  /** Central QR processing — used by camera, gallery, and manual input */
-  const processQRValue = (qrValue: string) => {
-    const parsed = parseUPIQR(qrValue);
-    const validation = validateQRData(parsed);
-    if (validation.valid && parsed) {
-      setIsCameraActive(false);
-      setScannedData(parsed);
-    } else {
-      Alert.alert('Invalid QR', validation.error || 'Could not parse UPI data from image');
-    }
-  };
-
-  /** Pick an image from gallery and decode QR from it */
   const handleGalleryUpload = async () => {
     try {
+      setIsCameraActive(false);
       const result = await launchImageLibrary({
         mediaType: 'photo',
-        selectionLimit: 1,
         quality: 1,
+        selectionLimit: 1,
+        copyTo: 'cachesDirectory',
+        includeBase64: true,
       });
-
-      if (result.didCancel || !result.assets || result.assets.length === 0) {
-        return; // User cancelled
-      }
-
-      const imageUri = result.assets[0].uri;
-      if (!imageUri) {
-        Alert.alert('Error', 'Could not read the selected image');
+      const asset = result.assets?.[0];
+      if (!asset) {
+        setIsCameraActive(true);
         return;
       }
 
-      setIsProcessingGallery(true);
-      setIsCameraActive(false);
-
-      // Decode QR from the selected image
-      const qrResult = await RNQRGenerator.detect({ uri: imageUri });
-
-      if (qrResult.values && qrResult.values.length > 0) {
-        const qrValue = qrResult.values[0];
-        console.log('[QRScan] Gallery QR decoded:', qrValue);
-        processQRValue(qrValue);
-      } else {
-        Alert.alert(
-          'No QR Found',
-          'Could not detect a QR code in the selected image. Please try another image.',
-        );
+      const rawUri = asset.fileCopyUri || asset.uri;
+      if (!rawUri) {
         setIsCameraActive(true);
+        return;
       }
-    } catch (error: any) {
-      console.warn('[QRScan] Gallery QR decode error:', error);
-      Alert.alert('Error', 'Failed to process the image. Please try again.');
+
+      const uriCandidates = [
+        rawUri,
+        rawUri.startsWith('file://') ? rawUri : `file://${rawUri}`,
+        rawUri.replace(/^file:\/\//, ''),
+      ];
+
+      let decodedValue: string | null = null;
+      if (asset.base64) {
+        try {
+          const decoded = await RNQRGenerator.detect({ base64: asset.base64 });
+          if (decoded.values?.length) decodedValue = decoded.values[0];
+        } catch (_) {}
+      }
+      if (!decodedValue) {
+        for (const uri of uriCandidates) {
+          try {
+            const decoded = await RNQRGenerator.detect({ uri });
+            if (decoded.values?.length) {
+              decodedValue = decoded.values[0];
+              break;
+            }
+          } catch (_) {}
+        }
+      }
+
+      if (decodedValue) {
+        processQRValue(decodedValue);
+      } else {
+        setIsCameraActive(true);
+        scanLock.current = false;
+        Alert.alert('No QR Code Found', 'Please select a clear UPI QR code image.');
+      }
+    } catch (e) {
+      console.error(e);
       setIsCameraActive(true);
-    } finally {
-      setIsProcessingGallery(false);
+      scanLock.current = false;
+      Alert.alert('Error', 'Failed to read image. Try another photo.');
     }
   };
 
-  const handleManualScan = () => {
-    if (!manualInput.trim()) return;
-    const parsed = parseUPIQR(manualInput.trim());
-    const validation = validateQRData(parsed);
-    if (!validation.valid || !parsed) {
-      Alert.alert('Invalid QR Data', validation.error || 'Could not parse');
-      return;
-    }
-    setScannedData(parsed);
-    setIsCameraActive(false);
-  };
+  if (!device || !hasPermission) {
+    return (
+      <View style={[s.screen, { backgroundColor: '#000', alignItems: 'center', justifyContent: 'center' }]}>
+        <Icon name="camera-off" size={48} color="#FFF" style={{ opacity: 0.5, marginBottom: 16 }} />
+        <Text style={{ color: '#FFF', fontSize: 16, fontWeight: '600' }}>Camera permission required</Text>
+        <TouchableOpacity style={{ marginTop: 20, padding: 12, backgroundColor: colors.primary, borderRadius: 8 }} onPress={requestPermission}>
+          <Text style={{ color: '#FFF', fontWeight: '700' }}>Grant Permission</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
-  const handleProceed = () => {
-    if (!scannedData) return;
-    const { receiver, name } = getReceiverFromQR(scannedData);
-    // Navigate to UPI Payment screen with pre-filled data from QR
-    navigation.navigate('UpiPayment', {
-      upiId: scannedData.upiId, // Original UPI ID from QR
-      name: scannedData.name || name,
-      amount: scannedData.amount,
-      note: scannedData.note || '',
-    });
-  };
-
-  const handleReset = () => {
-    setScannedData(null);
-    setManualInput('');
-    setIsCameraActive(true);
-  };
+  const translateY = scanLineAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, SCANNER_SIZE - 4]
+  });
 
   return (
-    <View style={[s.screen, { backgroundColor: colors.background }]}>
-      {/* Background Decorative Glow */}
-      <View style={s.bgGlowWrap}>
-        <LinearGradient colors={['rgba(10, 132, 255, 0.12)', 'transparent']} style={s.bgGlow} />
-      </View>
+    <View style={s.screen}>
+      <Camera
+        style={StyleSheet.absoluteFill}
+        device={device}
+        isActive={isCameraActive}
+        codeScanner={codeScanner}
+        torch={torchOn ? 'on' : 'off'}
+      />
 
-      <View style={[s.header, { paddingTop: insets.top + spacing.sm, borderBottomColor: 'rgba(255,255,255,0.06)' }]}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={[s.backBtn, { backgroundColor: colors.surfaceHighlight }]}>
-          <Icon name="arrow-left" size={20} color={colors.textPrimary} />
-        </TouchableOpacity>
-        <Text style={[s.headerTitle, { color: colors.textPrimary }]}>{t.scan}</Text>
-        <View style={{ width: 36 }} />
-      </View>
-
-      <View style={s.content}>
-        {!scannedData ? (
-          <>
-            <View style={s.scannerWrap}>
-              <View style={[s.scanner, { backgroundColor: colors.surface, borderColor: 'rgba(255,255,255,0.1)' }]}>
-                {isProcessingGallery ? (
-                  <View style={s.scanCenter}>
-                    <ActivityIndicator size="large" color={colors.primary} />
-                    <Text style={{ color: colors.textTertiary, textAlign: 'center', marginTop: 12, fontWeight: '600' }}>
-                      Reading QR from image...
-                    </Text>
-                  </View>
-                ) : hasPermission && device && !showManual ? (
-                  <>
-                    <Camera style={StyleSheet.absoluteFill} device={device} isActive={isCameraActive} codeScanner={codeScanner} />
-                    <View style={s.corners}>
-                      <View style={[s.corner, s.tl]} /><View style={[s.corner, s.tr]} />
-                      <View style={[s.corner, s.bl]} /><View style={[s.corner, s.br]} />
-                    </View>
-                    <Animated.View style={[s.scanLine, {
-                      transform: [{ translateY: scanLineAnim.interpolate({
-                        inputRange: [0, 1], outputRange: [0, SCANNER_SIZE - 4],
-                      })}],
-                    }]} />
-                  </>
-                ) : (
-                  <View style={s.scanCenter}>
-                    <Icon name={!hasPermission ? 'camera-off' : (showManual ? 'keyboard' : 'camera-outline')} size={48} color={colors.textTertiary} />
-                    <Text style={{ color: colors.textTertiary, textAlign: 'center', fontWeight: '600' }}>
-                      {!hasPermission ? 'Permission needed' : (showManual ? 'Manual Input' : 'Initializing...')}
-                    </Text>
-                  </View>
-                )}
-              </View>
-            </View>
-
-            {/* Premium Action buttons row */}
-            <View style={s.actionRow}>
-              <TouchableOpacity
-                style={[s.actionBtn, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]}
-                onPress={handleGalleryUpload}
-                disabled={isProcessingGallery}
-              >
-                <View style={[s.iconCircle, { backgroundColor: '#0A84FF20' }]}>
-                  <Icon name="image-outline" size={20} color="#0A84FF" />
-                </View>
-                <Text style={[s.actionBtnText, { color: colors.textSecondary }]}>Gallery</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[s.actionBtn, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]}
-                onPress={() => setShowManual(!showManual)}
-              >
-                <View style={[s.iconCircle, { backgroundColor: '#5856D620' }]}>
-                  <Icon name={showManual ? 'camera' : 'keyboard-outline'} size={20} color="#5856D6" />
-                </View>
-                <Text style={[s.actionBtnText, { color: colors.textSecondary }]}>{showManual ? 'Camera' : 'Manual'}</Text>
-              </TouchableOpacity>
-            </View>
-
-            {showManual && (
-              <View style={s.manualSection}>
-                <TextInput style={[s.manualInput, { backgroundColor: colors.surfaceElevated, color: colors.textPrimary, borderColor: colors.border }]} 
-                  value={manualInput} onChangeText={setManualInput} placeholder="upi://pay?pa=..." placeholderTextColor={colors.textTertiary} multiline />
-                <TouchableOpacity style={[s.parseBtn, !manualInput.trim() && { opacity: 0.5 }]} onPress={handleManualScan} disabled={!manualInput.trim()}>
-                  <Text style={s.parseBtnText}>Parse QR Data</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-          </>
-        ) : (
-          <View style={s.result}>
-            <View style={[s.resultIcon, { backgroundColor: colors.success + '20' }]}>
-              <Icon name="check-circle" size={48} color={colors.success} />
-            </View>
-            <Text style={[s.resultTitle, { color: colors.textPrimary }]}>{t.success.toUpperCase()}</Text>
-            
-            <View style={[s.resultCard, { backgroundColor: colors.surfaceElevated, borderColor: 'rgba(255,255,255,0.08)' }]}>
-              <Row label="PAYEE NAME" value={getReceiverFromQR(scannedData).name} colors={colors} />
-              <Row label="UPI ID" value={getReceiverFromQR(scannedData).receiver} colors={colors} />
-              {scannedData.amount && <Row label="AMOUNT" value={formatCurrency(scannedData.amount)} colors={colors} />}
-            </View>
-
-            <TouchableOpacity style={s.proceedBtnWrap} onPress={handleProceed}>
-              <LinearGradient colors={['#0A84FF', '#007AFF']} style={s.proceedBtn}>
-                <Text style={s.proceedText}>Proceed to Pay</Text>
-                <Icon name="chevron-right" size={20} color="#FFF" />
-              </LinearGradient>
-            </TouchableOpacity>
-            
-            <TouchableOpacity style={[s.resetBtn, { borderColor: colors.border }]} onPress={handleReset}>
-              <Text style={{ color: colors.textSecondary, fontWeight: '700' }}>Scan Another QR</Text>
-            </TouchableOpacity>
+      {/* Overlay to dim surroundings */}
+      <View style={s.overlay}>
+        <View style={s.overlayTop} />
+        <View style={s.overlayMiddleRow}>
+          <View style={s.overlaySide} />
+          <View style={s.scannerCutout}>
+            {/* Animated Scan Line */}
+            <Animated.View style={[s.scanLine, { transform: [{ translateY }] }]}>
+              <LinearGradient colors={['rgba(0,122,255,0)', 'rgba(0,122,255,0.8)', 'rgba(0,122,255,0)']} style={StyleSheet.absoluteFill} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} />
+            </Animated.View>
+            {/* Corner Markers */}
+            <View style={[s.corner, s.topLeft]} />
+            <View style={[s.corner, s.topRight]} />
+            <View style={[s.corner, s.bottomLeft]} />
+            <View style={[s.corner, s.bottomRight]} />
           </View>
-        )}
+          <View style={s.overlaySide} />
+        </View>
+        <View style={s.overlayBottom} />
+      </View>
+
+      {/* Header controls */}
+      <View style={[s.header, { paddingTop: Math.max(insets.top, 16) }]}>
+        <TouchableOpacity style={s.iconBtn} onPress={() => navigation.goBack()}>
+          <Icon name="close" size={28} color="#FFF" />
+        </TouchableOpacity>
+        <View style={s.titleBadge}>
+          <Text style={s.titleText}>Scan any QR to Pay</Text>
+        </View>
+        <TouchableOpacity style={s.iconBtn} onPress={() => setTorchOn(!torchOn)}>
+          <Icon name={torchOn ? 'flash' : 'flash-off'} size={24} color="#FFF" />
+        </TouchableOpacity>
+      </View>
+
+      {/* Bottom Controls */}
+      <View style={[s.footer, { paddingBottom: Math.max(insets.bottom, 24) }]}>
+        <TouchableOpacity style={s.galleryBtn} onPress={handleGalleryUpload} activeOpacity={0.85}>
+          <LinearGradient colors={['#007AFF', '#5856D6']} style={s.galleryGrad} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
+            <Icon name="image-multiple" size={22} color="#FFF" />
+            <Text style={s.galleryText}>Upload from Gallery</Text>
+          </LinearGradient>
+        </TouchableOpacity>
+        <View style={s.footerRow}>
+          <TouchableOpacity style={s.footerBtn} onPress={() => { setIsCameraActive(false); navigation.navigate('SendMoney'); }}>
+            <View style={s.footerIconWrap}>
+              <Icon name="keyboard" size={24} color="#FFF" />
+            </View>
+            <Text style={s.footerText}>Enter UPI ID / Mobile</Text>
+          </TouchableOpacity>
+        </View>
       </View>
     </View>
   );
 };
 
-const Row = ({ label, value, colors }: any) => (
-  <View style={s.row}>
-    <Text style={{ color: colors.textTertiary, fontSize: 10, fontWeight: '800', letterSpacing: 1 }}>{label}</Text>
-    <Text style={{ color: colors.textPrimary, fontWeight: '700', fontSize: 15 }}>{value}</Text>
-  </View>
-);
-
 const s = StyleSheet.create({
-  screen: { flex: 1 },
-  bgGlowWrap: { ...StyleSheet.absoluteFillObject, overflow: 'hidden' },
-  bgGlow: { position: 'absolute', top: -100, right: -100, width: 400, height: 400, borderRadius: 200 },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1 },
-  backBtn: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { ...typography.h3, fontWeight: '900', letterSpacing: 0.5 },
-  content: { flex: 1, padding: spacing.xl },
-  scannerWrap: { alignItems: 'center', marginVertical: spacing.xl },
-  scanner: { width: SCANNER_SIZE, height: SCANNER_SIZE, borderRadius: 32, overflow: 'hidden', justifyContent: 'center', alignItems: 'center', borderWidth: 1 },
-  corners: { ...StyleSheet.absoluteFillObject, zIndex: 10 },
-  corner: { position: 'absolute', width: 32, height: 32, borderColor: '#0A84FF' },
-  tl: { top: 20, left: 20, borderTopWidth: 4, borderLeftWidth: 4, borderTopLeftRadius: 12 },
-  tr: { top: 20, right: 20, borderTopWidth: 4, borderRightWidth: 4, borderTopRightRadius: 12 },
-  bl: { bottom: 20, left: 20, borderBottomWidth: 4, borderLeftWidth: 4, borderBottomLeftRadius: 12 },
-  br: { bottom: 20, right: 20, borderBottomWidth: 4, borderRightWidth: 4, borderBottomRightRadius: 12 },
-  scanLine: { position: 'absolute', left: 24, right: 24, height: 2, backgroundColor: '#0A84FF', opacity: 0.6, zIndex: 10 },
-  scanCenter: { alignItems: 'center', gap: 12 },
-  actionRow: { flexDirection: 'row', justifyContent: 'center', gap: 16, marginBottom: 8 },
-  actionBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingVertical: 14, paddingHorizontal: 20,
-    borderRadius: 20, borderWidth: 1, elevation: 4,
-  },
-  iconCircle: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
-  actionBtnText: { fontWeight: '800', fontSize: 14 },
-  manualSection: { marginTop: 24, gap: 12 },
-  manualInput: { borderRadius: 16, borderWidth: 1, padding: 16, minHeight: 70, fontSize: 13, fontFamily: 'monospace' },
-  parseBtn: { backgroundColor: '#0A84FF', borderRadius: 16, padding: 18, alignItems: 'center', elevation: 4 },
-  parseBtnText: { color: '#FFF', fontWeight: '900', fontSize: 15 },
-  result: { flex: 1, alignItems: 'center', paddingTop: 10, gap: 24 },
-  resultIcon: { width: 80, height: 80, borderRadius: 40, alignItems: 'center', justifyContent: 'center' },
-  resultTitle: { fontSize: 14, fontWeight: '900', letterSpacing: 2 },
-  resultCard: { width: '100%', borderRadius: 24, padding: 24, borderWidth: 1, gap: 16 },
-  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  proceedBtnWrap: { width: '100%', borderRadius: 18, overflow: 'hidden', elevation: 8 },
-  proceedBtn: { flexDirection: 'row', padding: 20, alignItems: 'center', justifyContent: 'center', gap: 8 },
-  proceedText: { color: '#FFF', fontWeight: '900', fontSize: 16 },
-  resetBtn: { width: '100%', borderWidth: 1, borderRadius: 18, padding: 18, alignItems: 'center' },
+  screen: { flex: 1, backgroundColor: '#000' },
+  overlay: { ...StyleSheet.absoluteFillObject },
+  overlayTop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)' },
+  overlayBottom: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)' },
+  overlayMiddleRow: { flexDirection: 'row', height: SCANNER_SIZE },
+  overlaySide: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)' },
+  scannerCutout: { width: SCANNER_SIZE, height: SCANNER_SIZE, backgroundColor: 'transparent' },
+  
+  scanLine: { width: '100%', height: 4, backgroundColor: '#007AFF', shadowColor: '#007AFF', shadowOpacity: 1, shadowRadius: 10, elevation: 5 },
+  corner: { position: 'absolute', width: 40, height: 40, borderColor: '#FFF', borderWidth: 4 },
+  topLeft: { top: 0, left: 0, borderRightWidth: 0, borderBottomWidth: 0, borderTopLeftRadius: 24 },
+  topRight: { top: 0, right: 0, borderLeftWidth: 0, borderBottomWidth: 0, borderTopRightRadius: 24 },
+  bottomLeft: { bottom: 0, left: 0, borderRightWidth: 0, borderTopWidth: 0, borderBottomLeftRadius: 24 },
+  bottomRight: { bottom: 0, right: 0, borderLeftWidth: 0, borderTopWidth: 0, borderBottomRightRadius: 24 },
+  
+  header: { position: 'absolute', top: 0, left: 0, right: 0, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16 },
+  iconBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(0,0,0,0.4)', alignItems: 'center', justifyContent: 'center' },
+  titleBadge: { backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20 },
+  titleText: { color: '#FFF', fontSize: 13, fontWeight: '600' },
+  
+  footer: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.75)', paddingTop: 16, paddingHorizontal: 20, borderTopLeftRadius: 28, borderTopRightRadius: 28, gap: 12 },
+  galleryBtn: { borderRadius: 16, overflow: 'hidden' },
+  galleryGrad: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, paddingVertical: 16 },
+  galleryText: { color: '#FFF', fontSize: 16, fontWeight: '800' },
+  footerRow: { flexDirection: 'row', justifyContent: 'center' },
+  footerBtn: { alignItems: 'center', gap: 8 },
+  footerIconWrap: { width: 56, height: 56, borderRadius: 28, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' },
+  footerText: { color: '#FFF', fontSize: 12, fontWeight: '500' },
 });
