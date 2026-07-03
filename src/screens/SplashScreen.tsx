@@ -53,7 +53,7 @@ export const SplashScreen: React.FC<{ onFinish: () => void }> = ({ onFinish }) =
           <Image source={require('../../assets/EdgePay_Icon.png')} style={{ width: 100, height: 100, borderRadius: 32 }} />
         </View>
         <Text style={[s.appName, { color: colors.textPrimary }]}>EdgePay</Text>
-        <Text style={[s.slogan, { color: colors.textSecondary }]}>Premium Offline Payments</Text>
+        <Text style={[s.slogan, { color: colors.textSecondary }]}>Offline Payments for India</Text>
       </Animated.View>
     </View>
   );

@@ -26,10 +26,14 @@ class PaymentWidgetService : Service(), TextToSpeech.OnInitListener {
         const val ACTION_SHOW_QUICK_PAY = "com.edgepay.app.widget.SHOW_QUICK_PAY"
         const val ACTION_SHOW_FINANCE = "com.edgepay.app.widget.SHOW_FINANCE"
         const val ACTION_HIDE_WIDGETS = "com.edgepay.app.widget.HIDE_WIDGETS"
+        const val ACTION_PROCESS_MESSAGE = "com.edgepay.app.widget.PROCESS_MESSAGE"
         
         const val EXTRA_LANGUAGE = "language"
         const val EXTRA_ANNOUNCE_CREDITS = "announceCredits"
         const val EXTRA_ANNOUNCE_DEBITS = "announceDebits"
+        const val EXTRA_SENDER = "sender"
+        const val EXTRA_BODY = "body"
+        const val EXTRA_TIMESTAMP = "timestamp"
 
         var isRunning = false
     }
@@ -52,6 +56,7 @@ class PaymentWidgetService : Service(), TextToSpeech.OnInitListener {
     private var announceCredits = true
     private var announceDebits = false
     private val recentKeys = ArrayDeque<Pair<String, Long>>()
+    private val pendingSpeechQueue = ArrayDeque<PaymentInfo>()
 
     override fun onCreate() {
         super.onCreate()
@@ -88,6 +93,15 @@ class PaymentWidgetService : Service(), TextToSpeech.OnInitListener {
         announceDebits = intent?.getBooleanExtra(EXTRA_ANNOUNCE_DEBITS, false) ?: announceDebits
 
         startForeground(NOTIFICATION_ID, buildNotification())
+
+        if (intent?.action == ACTION_PROCESS_MESSAGE) {
+            val sender = intent.getStringExtra(EXTRA_SENDER).orEmpty()
+            val body = intent.getStringExtra(EXTRA_BODY).orEmpty()
+            if (body.isNotBlank()) {
+                processIncomingSms(sender, body)
+            }
+        }
+
         return START_STICKY
     }
 
@@ -112,6 +126,7 @@ class PaymentWidgetService : Service(), TextToSpeech.OnInitListener {
             }
             tts?.setSpeechRate(0.9f)
             ttsReady = true
+            flushPendingSpeech()
         }
     }
 
@@ -168,7 +183,11 @@ class PaymentWidgetService : Service(), TextToSpeech.OnInitListener {
     }
 
     private fun announcePayment(info: PaymentInfo) {
-        if (!ttsReady || info.type != "CREDIT") return
+        if (info.type != "CREDIT") return
+        if (!ttsReady) {
+            pendingSpeechQueue.addLast(info)
+            return
+        }
         val rupees = info.amount.toInt()
         val paise = Math.round((info.amount - rupees) * 100)
         val amountSpeech = if (paise > 0) "$rupees rupees and $paise paise" else "$rupees rupees"
@@ -178,6 +197,12 @@ class PaymentWidgetService : Service(), TextToSpeech.OnInitListener {
             "Credit alert. $amountSpeech credited."
         }
         tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "edgepay_payment")
+    }
+
+    private fun flushPendingSpeech() {
+        while (ttsReady && pendingSpeechQueue.isNotEmpty()) {
+            announcePayment(pendingSpeechQueue.removeFirst())
+        }
     }
 
     // ── Overlays ───────────────────────────────────────────────────

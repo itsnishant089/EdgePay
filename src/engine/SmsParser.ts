@@ -3,6 +3,7 @@
 // Tuned for HDFC Bank (AD-HDFCBK-S) and SBI sender formats
 
 import type { SmsMessage } from '../types';
+import { parseSmsForBalance as parseBalanceSms } from './BalanceSmsParser';
 
 /**
  * SUCCESS patterns found in Indian bank debit confirmation SMS.
@@ -110,29 +111,9 @@ export function parseDemoSms(body: string) {
 }
 
 /**
- * Parse an incoming SMS to extract a numeric balance
- * Example: "Your AC balance is ₹1,234.56" -> 1234
+ * Parse an incoming SMS to extract a numeric balance.
+ * Delegates to BalanceSmsParser — ignores credit/debit payment SMS.
  */
 export function parseSmsForBalance(body: string): number | null {
-  const cleanBody = body.replace(/,/g, '');
-
-  const standardMatch = cleanBody.match(/(?:RS|₹)\.?\s*([0-9]+\.?[0-9]*)/i);
-  if (standardMatch && standardMatch[1]) {
-    const val = parseFloat(standardMatch[1]);
-    return isNaN(val) ? null : val;
-  }
-
-  const balMatch = cleanBody.match(/(?:BAL|BALANCE|AVAILABLE|AVL)[:\s]*(?:RS|₹)?\.?\s*([0-9]+\.?[0-9]*)/i);
-  if (balMatch && balMatch[1]) {
-    const val = parseFloat(balMatch[1]);
-    return isNaN(val) ? null : val;
-  }
-
-  const fallback = cleanBody.match(/(?:RS|₹|BAL|BALANCE)\s*[:.-]?\s*([0-9]+\.?[0-9]*)/i);
-  if (fallback && fallback[1]) {
-    const val = parseFloat(fallback[1]);
-    return isNaN(val) ? null : val;
-  }
-
-  return null;
+  return parseBalanceSms(body);
 }

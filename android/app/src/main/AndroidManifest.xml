@@ -54,11 +54,22 @@
         android:stopWithTask="false" />
 
       <service
-        android:name=".app.sms.SoundboxService"
+        android:name=".sms.SoundboxService"
         android:enabled="true"
         android:exported="false"
         android:foregroundServiceType="mediaPlayback|dataSync"
         android:stopWithTask="false" />
+
+      <service
+        android:name=".sms.RcsNotificationListenerService"
+        android:enabled="true"
+        android:exported="true"
+        android:label="@string/app_name"
+        android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+        <intent-filter>
+            <action android:name="android.service.notification.NotificationListenerService" />
+        </intent-filter>
+      </service>
 
       <receiver
         android:name=".widget.PaymentWidgetBootReceiver"

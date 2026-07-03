@@ -144,6 +144,25 @@ export async function checkSmsPermissions(): Promise<SmsPermissions> {
   }
 }
 
+export async function hasNotificationAccess(): Promise<boolean> {
+  if (!SmsModule?.checkNotificationAccess) {
+    return false;
+  }
+  try {
+    return await SmsModule.checkNotificationAccess();
+  } catch (error) {
+    console.warn('[SmsService] Notification access check failed:', error);
+    return false;
+  }
+}
+
+export async function openNotificationAccessSettings(): Promise<void> {
+  if (!SmsModule?.openNotificationAccessSettings) {
+    throw new Error('[SmsService] Notification settings bridge unavailable');
+  }
+  await SmsModule.openNotificationAccessSettings();
+}
+
 /**
  * Read recent SMS messages from inbox (for polling bank confirmations)
  */

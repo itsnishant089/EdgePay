@@ -109,11 +109,40 @@ class SoundboxService : Service() {
     }
 
     private fun sendEventToReact(sender: String?, body: String?, timestamp: Double) {
+        val reactApp = application as? ReactApplication ?: return
+        val reactContext = reactApp.reactHost?.currentReactContext
+        if (reactContext == null) {
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                retrySendEventToReact(sender, body, timestamp, 0)
+            }, 800)
+            return
+        }
+        emitSmsEvent(reactContext, sender, body, timestamp)
+    }
+
+    private fun retrySendEventToReact(sender: String?, body: String?, timestamp: Double, attempt: Int) {
+        if (attempt >= 5) return
         try {
             val reactApp = application as? ReactApplication ?: return
-            val reactHost = reactApp.reactHost ?: return
-            val reactContext = reactHost.currentReactContext ?: return
+            val reactContext = reactApp.reactHost?.currentReactContext ?: run {
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    retrySendEventToReact(sender, body, timestamp, attempt + 1)
+                }, 1000)
+                return
+            }
+            emitSmsEvent(reactContext, sender, body, timestamp)
+        } catch (e: Exception) {
+            android.util.Log.w("SoundboxService", "Retry emit failed: ${e.message}")
+        }
+    }
 
+    private fun emitSmsEvent(
+        reactContext: com.facebook.react.bridge.ReactContext,
+        sender: String?,
+        body: String?,
+        timestamp: Double,
+    ) {
+        try {
             val params = Arguments.createMap().apply {
                 putString("sender", sender ?: "")
                 putString("body", body ?: "")
@@ -123,7 +152,6 @@ class SoundboxService : Service() {
                 .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
                 .emit(SmsModule.SMS_RECEIVED_EVENT, params)
         } catch (e: Exception) {
-            // Silently fail if React context is not available
             android.util.Log.w("SoundboxService", "Failed to emit SMS event to React: ${e.message}")
         }
     }

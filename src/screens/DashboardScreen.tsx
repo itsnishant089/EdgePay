@@ -10,7 +10,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { TransactionList } from '../components/TransactionList';
 import { useStore, getDisplayBalance } from '../store/useStore';
-import { parseSmsForBalance } from '../engine/SmsParser';
+import { parseSmsForBalance } from '../engine/BalanceSmsParser';
 import { formatCurrency } from '../utils/formatters';
 import { translations } from '../utils/i18n';
 import { syncGoalAmount, syncHomeWidget, syncBalanceWidget } from '../engine/WidgetService';
@@ -18,14 +18,20 @@ import { useTheme, spacing, borderRadius, typography, shadows, gradients } from 
 import { PinScreen, triggerPinError } from '../components/PinScreen';
 import { GoalModal } from '../components/GoalModal';
 import { hashPin, authenticate, isBiometricAvailable } from '../engine/BiometricService';
-import { isSmsAvailable, onSmsReceived, readRecentSms } from '../engine/SmsService';
+import {
+  hasNotificationAccess,
+  isSmsAvailable,
+  onSmsReceived,
+  openNotificationAccessSettings,
+  readRecentSms,
+} from '../engine/SmsService';
 import Tts from 'react-native-tts';
 import { AvatarCircle } from '../components/AvatarCircle';
 import { SmartSearchModal } from '../components/SmartSearchModal';
 import { Contact, Transaction, BalanceSource } from '../types';
-import { normalizePhoneForPayment } from '../utils/phoneUtils';
 import { TAB_BAR_HEIGHT, HDFC_BALANCE_REFRESH_MS } from '../utils/constants';
-import { requestHdfcBalanceSms } from '../engine/BalanceService';
+import { normalizePhoneForPayment } from '../utils/phoneUtils';
+import { requestHdfcBalanceSms, pollHdfcBalanceSms, handleIncomingBalanceSms, scanInboxForBalance } from '../engine/BalanceService';
 
 export const DashboardScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
   const insets = useSafeAreaInsets();
@@ -116,47 +122,45 @@ export const DashboardScreen: React.FC<{ navigation: any }> = ({ navigation }) =
 
     if (user.bank === 'HDFC') {
       try {
-        await requestHdfcBalanceSms();
-        let attempts = 0;
-        const maxAttempts = 12;
-        const pollInterval = setInterval(async () => {
-          attempts++;
-          try {
-            const messages = await readRecentSms(15);
-            for (const msg of messages) {
-              const sender = msg.sender.toUpperCase();
-              if (sender.includes('HDFC') || sender.includes('07308080808') || sender.includes('7070022222')) {
-                const bal = parseSmsForBalance(msg.body);
-                if (bal !== null) {
-                  clearInterval(pollInterval);
-                  applyBankBalance(bal, revealAfter);
-                  setRefreshing(false);
-                  setIsFetchingBalance(false);
-                  return;
-                }
-                const hdfcMatch = msg.body.match(/(?:is|balance|avl)[:\s]*(?:Rs\.?|₹)?\s*([\d,]+\.?\d*)/i);
-                if (hdfcMatch) {
-                  const parsedBal = parseFloat(hdfcMatch[1].replace(/,/g, ''));
-                  if (!isNaN(parsedBal)) {
-                    clearInterval(pollInterval);
-                    applyBankBalance(parsedBal, revealAfter);
-                    setRefreshing(false);
-                    setIsFetchingBalance(false);
-                    return;
-                  }
-                }
-              }
-            }
-          } catch (_) {}
-          if (attempts >= maxAttempts) {
-            clearInterval(pollInterval);
+        const missingNotificationAccess = !(await hasNotificationAccess());
+        const sent = await requestHdfcBalanceSms({ force: true, reason: 'manual' });
+        if (!sent) {
+          setIsFetchingBalance(false);
+          setRefreshing(false);
+          return;
+        }
+        const sinceMs = Date.now() - 10_000;
+        await pollHdfcBalanceSms(
+          (bal) => {
+            applyBankBalance(bal, revealAfter);
+            setRefreshing(false);
+            setIsFetchingBalance(false);
+          },
+          () => {
             setIsFetchingBalance(false);
             setRefreshing(false);
-            if (revealAfter) {
+            if (revealAfter && missingNotificationAccess) {
+              Alert.alert(
+                'Enable RCS Balance Capture',
+                'HDFC is replying in Google Messages / RCS chat. Turn on Notification Access once so EdgePay can read that balance reply and update your app balance.',
+                [
+                  { text: 'Cancel', style: 'cancel' },
+                  {
+                    text: 'Open Settings',
+                    onPress: () => {
+                      openNotificationAccessSettings().catch(err => {
+                        console.warn('[BalanceFetch] Failed to open notification access:', err);
+                      });
+                    },
+                  },
+                ],
+              );
+            } else if (revealAfter) {
               Alert.alert('Balance Check', 'Waiting for HDFC SMS reply. Pull down to retry in a moment.');
             }
-          }
-        }, 3000);
+          },
+          { sinceMs },
+        );
       } catch (err) {
         console.warn('[BalanceFetch] Error sending SMS to HDFC:', err);
         setIsFetchingBalance(false);
@@ -208,17 +212,31 @@ export const DashboardScreen: React.FC<{ navigation: any }> = ({ navigation }) =
     }
   }, [user.bank, balanceSource, applyBankBalance, settings.autoBalanceRefresh, settings.autoBalanceOnAppOpen, navigation]);
 
-  // Background HDFC balance refresh every 6 minutes when enabled
+  // When app open fetch completes, pick up balance from inbox
+  useEffect(() => {
+    if (balanceSource !== 'BANK' || user.bank !== 'HDFC') return;
+    let cancelled = false;
+    const check = async () => {
+      const bal = await scanInboxForBalance(Date.now() - 15 * 60_000);
+      if (!cancelled && bal !== null) {
+        applyBankBalance(bal, isRevealed);
+        setIsFetchingBalance(false);
+        setRefreshing(false);
+      }
+    };
+    check();
+    const t = setInterval(check, 8000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [balanceSource, user.bank, applyBankBalance, isRevealed]);
   useEffect(() => {
     if (balanceSource !== 'BANK' || user.bank !== 'HDFC' || !isSmsAvailable()) return;
     if (!settings.autoBalanceRefresh) return;
 
     const refreshInBackground = () => {
       if (AppState.currentState !== 'active') return;
-      requestHdfcBalanceSms().catch(() => {});
+      requestHdfcBalanceSms({ reason: 'auto-refresh' }).catch(() => {});
     };
 
-    refreshInBackground();
     const interval = setInterval(refreshInBackground, HDFC_BALANCE_REFRESH_MS);
     return () => clearInterval(interval);
   }, [balanceSource, user.bank, settings.autoBalanceRefresh]);
@@ -226,9 +244,7 @@ export const DashboardScreen: React.FC<{ navigation: any }> = ({ navigation }) =
   useEffect(() => {
     if (!isSmsAvailable()) return;
     const sub = onSmsReceived((sms) => {
-      const sender = sms.sender?.toUpperCase() || '';
-      if (!sender.includes('HDFC') && !sender.includes('07308080808') && !sender.includes('SBI')) return;
-      const bal = parseSmsForBalance(sms.body);
+      const bal = handleIncomingBalanceSms(sms);
       if (bal !== null && balanceSource === 'BANK') {
         applyBankBalance(bal, isRevealed);
         setIsFetchingBalance(false);
@@ -344,13 +360,14 @@ export const DashboardScreen: React.FC<{ navigation: any }> = ({ navigation }) =
     
     (transactions || []).forEach(t => {
       if (new Date(t.timestamp).toDateString() === todayStr) {
-        if (t.status === 'SUCCESS' || t.status === 'RECEIVED') { // Simple logic
-           // Assuming positive amount = received? Actually our current model only stores sent amount.
-           spent += t.amount;
-           if (t.amount > maxCategoryAmount) {
-             maxCategoryAmount = t.amount;
-             maxCategory = t.receiverName?.toLowerCase().includes('food') ? 'food' : 'shopping';
-           }
+        if (t.status === 'RECEIVED') {
+          received += t.amount;
+        } else if (t.status === 'SUCCESS' || t.status === 'SENT') {
+          spent += t.amount;
+          if (t.amount > maxCategoryAmount) {
+            maxCategoryAmount = t.amount;
+            maxCategory = t.receiverName?.toLowerCase().includes('food') ? 'food' : 'shopping';
+          }
         }
       }
     });
@@ -423,7 +440,7 @@ export const DashboardScreen: React.FC<{ navigation: any }> = ({ navigation }) =
             <Text style={{ color: colors.textSecondary, marginLeft: 12, fontSize: 15, fontWeight: '500' }}>Search transactions, contacts...</Text>
           </TouchableOpacity>
 
-          {/* Premium Bank Card */}
+          {/* Bank / Wallet Card */}
           <TouchableOpacity activeOpacity={0.95} onPress={() => !isRevealed && handleCheckBalance()}>
             <LinearGradient
               colors={gradients.primary}

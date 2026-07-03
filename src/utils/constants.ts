@@ -68,7 +68,7 @@ export const DEFAULT_SETTINGS = {
 /** Height reserved for the floating bottom tab bar so sticky buttons stay visible */
 export const TAB_BAR_HEIGHT = 88;
 
-/** HDFC balance enquiry SMS number */
+/** HDFC balance enquiry number */
 export const HDFC_BALANCE_SMS_NUMBER = '07308080808';
 
 /** Auto-refresh HDFC bank balance interval when app is active — 6 minutes */

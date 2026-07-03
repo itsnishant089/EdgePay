@@ -39,6 +39,7 @@ export interface SmsMessage {
   sender: string;
   body: string;
   timestamp: number;
+  source?: string;
 }
 
 export interface SmsPermissions {

@@ -3,6 +3,8 @@
 // Fully offline — zero internet dependency.
 
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
+import { readRecentSms } from './SmsService';
+import Tts from 'react-native-tts';
 import { parsePaymentSms, PaymentNotification } from './PaymentSmsParser';
 import { soundboxQueue } from './SoundboxQueue';
 import { duplicateFilter } from './DuplicateFilter';
@@ -84,7 +86,58 @@ export function onPaymentDetected(callback: PaymentCallback): { remove: () => vo
 // ──────────────────────────────────────────────────────────────────────
 
 let smsSubscription: { remove: () => void } | null = null;
+let inboxPollTimer: ReturnType<typeof setInterval> | null = null;
 let currentConfig: SoundboxConfig = { ...DEFAULT_SOUNDBOX_CONFIG };
+const processedSmsKeys = new Set<string>();
+let lastSeenInboxTs = 0;
+
+function smsDedupeKey(sender: string, body: string, timestamp?: number): string {
+  return `${sender}|${body.slice(0, 120)}|${timestamp ?? 0}`;
+}
+
+function markSmsProcessed(sender: string, body: string, timestamp?: number): void {
+  processedSmsKeys.add(smsDedupeKey(sender, body, timestamp));
+  if (processedSmsKeys.size > 200) {
+    const first = processedSmsKeys.values().next().value;
+    if (first) processedSmsKeys.delete(first);
+  }
+  if (timestamp) lastSeenInboxTs = Math.max(lastSeenInboxTs, timestamp);
+}
+
+async function initTts(): Promise<void> {
+  try {
+    await Tts.getInitStatus();
+    Tts.setIgnoreSilentSwitch('ignore');
+    Tts.setDucking(true);
+  } catch (_) {}
+}
+
+async function pollInboxForCredits(): Promise<void> {
+  if (!currentConfig.enabled || !currentConfig.announceCredits) return;
+  try {
+    const messages = await readRecentSms(12);
+    for (const msg of messages) {
+      if (msg.timestamp <= lastSeenInboxTs - 2000) continue;
+      const key = smsDedupeKey(msg.sender, msg.body, msg.timestamp);
+      if (processedSmsKeys.has(key)) continue;
+      handleIncomingSms(msg);
+    }
+  } catch (_) {}
+}
+
+function startInboxCreditPoll(): void {
+  if (inboxPollTimer) return;
+  inboxPollTimer = setInterval(() => {
+    pollInboxForCredits().catch(() => {});
+  }, 6000);
+}
+
+function stopInboxCreditPoll(): void {
+  if (inboxPollTimer) {
+    clearInterval(inboxPollTimer);
+    inboxPollTimer = null;
+  }
+}
 
 /**
  * Handle an incoming SMS Event
@@ -93,11 +146,17 @@ function handleIncomingSms(sms: any) {
   if (!currentConfig.enabled) return;
 
   const { sender, body, timestamp } = sms;
+  if (!body) return;
+
+  const key = smsDedupeKey(sender || '', body, timestamp);
+  if (processedSmsKeys.has(key)) return;
+
   console.log('[SoundboxEngine] SMS received from:', sender);
 
-  // 1. Parse SMS
   const notification = parsePaymentSms(sender, body);
-  if (!notification) return; // Not a payment or excluded
+  if (!notification) return;
+
+  markSmsProcessed(sender || '', body, timestamp);
 
   console.log(`[SoundboxEngine] Payment detected: ${notification.type} ${notification.amount}`);
 
@@ -158,13 +217,16 @@ export async function startSoundbox(config: SoundboxConfig): Promise<void> {
   stopSoundbox();
 
   try {
-    // Tell native layer to start Foreground Service listener
+    await initTts();
+
     if (SmsModule.startSmsListener) {
       await SmsModule.startSmsListener();
     }
 
     const emitter = new NativeEventEmitter(SmsModule);
     smsSubscription = emitter.addListener('onSmsReceived', handleIncomingSms);
+    startInboxCreditPoll();
+    pollInboxForCredits().catch(() => {});
 
     console.log('[SoundboxEngine] Started — listening via foreground service');
   } catch (err) {
@@ -176,6 +238,7 @@ export async function startSoundbox(config: SoundboxConfig): Promise<void> {
  * Stop the soundbox listener
  */
 export function stopSoundbox(): void {
+  stopInboxCreditPoll();
   if (smsSubscription) {
     smsSubscription.remove();
     smsSubscription = null;

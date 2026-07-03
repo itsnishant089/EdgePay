@@ -4,6 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme, typography } from '../theme';
 import { formatCurrency } from '../utils/formatters';
+import { getTransactionAmountSign, getTransactionLabel, isIncomingTransaction } from '../utils/transactionDisplay';
 
 export const TransactionDetailsScreen: React.FC<{ navigation: any, route: any }> = ({ navigation, route }) => {
   const insets = useSafeAreaInsets();
@@ -14,7 +15,9 @@ export const TransactionDetailsScreen: React.FC<{ navigation: any, route: any }>
 
   const isSuccess = transaction.status === 'SUCCESS' || transaction.status === 'RECEIVED';
   const isFailed = transaction.status === 'FAILED';
-  const color = isFailed ? colors.error : isSuccess ? colors.success : '#FF9F0A';
+  const incoming = isIncomingTransaction(transaction);
+  const color = isFailed ? colors.error : isSuccess ? (incoming ? colors.success : colors.textPrimary) : '#FF9F0A';
+  const sign = getTransactionAmountSign(transaction);
 
   const date = new Date(transaction.timestamp);
 
@@ -51,10 +54,10 @@ export const TransactionDetailsScreen: React.FC<{ navigation: any, route: any }>
             <Icon name={isSuccess ? "check" : isFailed ? "close" : "clock-outline"} size={48} color={color} />
           </View>
           <Text style={[s.amount, { color: colors.textPrimary }]}>
-            {transaction.status === 'RECEIVED' ? '+' : '-'} ₹{formatCurrency(transaction.amount)}
+            {sign}{formatCurrency(transaction.amount)}
           </Text>
           <Text style={[s.status, { color }]}>{transaction.status}</Text>
-          <Text style={[s.receiver, { color: colors.textSecondary }]}>To {transaction.receiverName || transaction.receiver}</Text>
+          <Text style={[s.receiver, { color: colors.textSecondary }]}>{getTransactionLabel(transaction)}</Text>
         </View>
 
         <Text style={[s.sectionTitle, { color: colors.textPrimary }]}>Timeline</Text>

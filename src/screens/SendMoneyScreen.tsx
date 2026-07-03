@@ -312,28 +312,40 @@ export const SendMoneyScreen: React.FC<{ navigation: any; route: any }> = ({
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 24, paddingBottom: TAB_BAR_HEIGHT + 120 }} keyboardShouldPersistTaps="handled">
         {/* Contact Profile Header */}
         <View style={s.profileHeader}>
-          <AvatarCircle name={receiverName || receiver || '?'} size={80} fontSize={28} />
-          <Text style={[s.profileName, { color: colors.textPrimary }]}>
-            {receiverName ? receiverName : (receiver ? receiver : 'Enter Details')}
-          </Text>
-          {receiver ? (
-            <View style={[s.upiBadge, { paddingRight: 8 }]}>
-              <Text style={s.upiBadgeText}>{receiverValidation.type === 'upi' ? receiver : `Ph: ${receiver}`}</Text>
-              <Icon name="check-decagram" size={14} color={colors.success} style={{ marginLeft: 4, marginRight: 8 }} />
-              <TouchableOpacity onPress={() => { setReceiver(''); setReceiverName(''); }} style={{ padding: 4, backgroundColor: 'rgba(0,0,0,0.05)', borderRadius: 12 }}>
-                <Icon name="close" size={14} color={colors.textSecondary} />
-              </TouchableOpacity>
-            </View>
+          {!receiverValidation.valid ? (
+            <>
+              <AvatarCircle name="?" size={80} fontSize={28} />
+              <TextInput
+                style={[s.receiverInput, { color: colors.textPrimary, borderColor: colors.border, marginTop: 16 }]}
+                placeholder="Mobile Number or UPI ID"
+                placeholderTextColor={colors.textTertiary}
+                value={receiver}
+                onChangeText={setReceiver}
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoFocus={!initialReceiver}
+                keyboardType="default"
+              />
+            </>
           ) : (
-            <TextInput 
-              style={[s.receiverInput, { color: colors.textPrimary, borderColor: colors.border }]} 
-              placeholder="Mobile Number or UPI ID" 
-              placeholderTextColor={colors.textTertiary}
-              value={receiver}
-              onChangeText={setReceiver}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
+            <>
+              <AvatarCircle name={receiverName || receiver || '?'} size={80} fontSize={28} />
+              <Text style={[s.profileName, { color: colors.textPrimary }]}>
+                {receiverName ? receiverName : receiver}
+              </Text>
+              <View style={[s.upiBadge, { paddingRight: 8 }]}>
+                <Text style={s.upiBadgeText}>
+                  {receiverValidation.type === 'upi' ? receiver : `Ph: ${receiver}`}
+                </Text>
+                <Icon name="check-decagram" size={14} color={colors.success} style={{ marginLeft: 4, marginRight: 8 }} />
+                <TouchableOpacity
+                  onPress={() => { setReceiver(''); setReceiverName(''); }}
+                  style={{ padding: 4, backgroundColor: 'rgba(0,0,0,0.05)', borderRadius: 12 }}
+                >
+                  <Icon name="close" size={14} color={colors.textSecondary} />
+                </TouchableOpacity>
+              </View>
+            </>
           )}
         </View>
 
@@ -348,7 +360,8 @@ export const SendMoneyScreen: React.FC<{ navigation: any; route: any }> = ({
             keyboardType="number-pad"
             placeholder="0"
             placeholderTextColor={colors.textTertiary}
-            autoFocus
+            editable={receiverValidation.valid}
+            autoFocus={receiverValidation.valid && !amount}
           />
         </View>
 

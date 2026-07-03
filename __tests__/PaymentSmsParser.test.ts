@@ -62,4 +62,14 @@ describe('PaymentSmsParser 2.0', () => {
     const text = buildAnnouncementText(notification, { language: 'hi', speakBankName: true, speakSenderName: true, enabled: true, announceCredits: true, announceDebits: false, speechRate: 1, announcementStyle: 'MERCHANT' });
     expect(text).toBe('क्रेडिट अलर्ट। PhonePe पर 500 रुपये प्राप्त हुए।');
   });
+
+  it('does not block credit when VPA contains cashback substring', () => {
+    const sms =
+      'Credit Alert! Rs.10.28 credited to HDFC Bank A/c XX7906 on 03-07-26 from VPA bhimcashback@hdfcbank (UPI 103594054054)';
+    const result = parsePaymentSms('VM-HDFCBK-S', sms);
+    expect(result).not.toBeNull();
+    expect(result?.type).toBe('CREDIT');
+    expect(result?.amount).toBe(10.28);
+    expect(result?.sender).toBe('bhimcashback@hdfcbank');
+  });
 });

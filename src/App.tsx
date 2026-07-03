@@ -41,8 +41,7 @@ import {
   onSmsReceived,
 } from './engine/SmsService';
 import { checkUssdPermissions, isUssdAvailable } from './engine/USSDService';
-import { parseSmsForBalance } from './engine/SmsParser';
-import { requestHdfcBalanceSms, pollHdfcBalanceSms } from './engine/BalanceService';
+import { requestHdfcBalanceSms, pollHdfcBalanceSms, handleIncomingBalanceSms } from './engine/BalanceService';
 import { PaymentManager } from './engine/PaymentManager';
 import { startPendingTransactionMonitor } from './engine/PendingTransactionMonitor';
 import { startSoundbox, stopSoundbox, updateSoundboxConfig } from './engine/PaymentSoundbox';
@@ -227,13 +226,15 @@ function AppContent() {
       try {
         const smsPerms = await checkSmsPermissions();
         if (!smsPerms.send || !smsPerms.receive) return;
-        await requestHdfcBalanceSms();
+        const sent = await requestHdfcBalanceSms({ reason: 'app-open' });
+        if (!sent) return;
+        const sinceMs = Date.now() - 10_000;
         cleanupPoll = await pollHdfcBalanceSms((bal) => {
           setUser({
             bankBalance: bal,
             balance: settings.balanceSource === 'BANK' ? bal : user.walletBalance,
           });
-        });
+        }, undefined, { sinceMs });
       } catch (err) {
         console.warn('[App] HDFC balance auto-fetch failed:', err);
       }
@@ -251,11 +252,9 @@ function AppContent() {
   useEffect(() => {
     if (!isOnboarded || !isSmsAvailable()) return;
     const sub = onSmsReceived((sms) => {
-      const sender = sms.sender?.toUpperCase() || '';
-      if (!sender.includes('HDFC') && !sender.includes('SBI')) return;
-      const bal = parseSmsForBalance(sms.body);
+      const bal = handleIncomingBalanceSms(sms);
       if (bal === null) return;
-      const { settings, setUser, user } = useStore.getState();
+      const { settings, setUser } = useStore.getState();
       if (settings.balanceSource === 'BANK') {
         setUser({ bankBalance: bal, balance: bal });
       }

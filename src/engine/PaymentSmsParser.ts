@@ -76,13 +76,29 @@ function identifyBank(sender: string): string {
 // Strict Keyword Filtering
 // ──────────────────────────────────────────────────────────────────────
 
-const EXCLUSION_KEYWORDS = [
-  'OTP', 'ONE TIME PASSWORD', 'VERIFY', 'VERIFICATION', 'PROMO',
-  'OFFER', 'APPLY', 'LOAN', 'EMI', 'CREDIT CARD', 'LIMIT',
-  'MINIMUM DUE', 'BILL', 'STATEMENT', 'RECHARGE', 'INSURANCE',
-  'SPAM', 'ADVERTISEMENT', 'CASHBACK', 'REWARD', 'DISCOUNT',
-  'VOUCHER', 'WINNER', 'LUCKY', 'FREE', 'SUBSCRIBE', 'REMINDER'
+/** Whole-word exclusions — avoids blocking VPAs like bhimcashback@hdfcbank */
+const EXCLUSION_WORDS = [
+  'OTP', 'VERIFY', 'VERIFICATION', 'PROMO', 'OFFER', 'APPLY', 'LOAN', 'EMI',
+  'LIMIT', 'BILL', 'STATEMENT', 'RECHARGE', 'INSURANCE', 'SPAM', 'ADVERTISEMENT',
+  'CASHBACK', 'REWARD', 'DISCOUNT', 'VOUCHER', 'WINNER', 'LUCKY', 'FREE',
+  'SUBSCRIBE', 'REMINDER',
 ];
+
+const EXCLUSION_PHRASES = [
+  'ONE TIME PASSWORD', 'CREDIT CARD', 'MINIMUM DUE',
+];
+
+function hasExclusionKeyword(body: string): boolean {
+  const upper = body.toUpperCase();
+  for (const phrase of EXCLUSION_PHRASES) {
+    if (upper.includes(phrase)) return true;
+  }
+  for (const word of EXCLUSION_WORDS) {
+    const re = new RegExp(`\\b${word}\\b`, 'i');
+    if (re.test(body)) return true;
+  }
+  return false;
+}
 
 const CREDIT_KEYWORDS = [
   'CREDITED', 'RECEIVED', 'DEPOSITED', 'ADDED TO YOUR',
@@ -97,7 +113,7 @@ const DEBIT_KEYWORDS = [
 
 function isPaymentSms(body: string): boolean {
   const upper = body.toUpperCase();
-  if (EXCLUSION_KEYWORDS.some(kw => upper.includes(kw))) return false;
+  if (hasExclusionKeyword(body)) return false;
   if (!/(?:RS|₹|INR)\.?\s*[0-9,]+\.?[0-9]*/i.test(body) && !/[0-9,]+\.?[0-9]*\s*(?:RS|₹|INR)/i.test(body)) return false;
   return CREDIT_KEYWORDS.some(kw => upper.includes(kw)) || DEBIT_KEYWORDS.some(kw => upper.includes(kw));
 }

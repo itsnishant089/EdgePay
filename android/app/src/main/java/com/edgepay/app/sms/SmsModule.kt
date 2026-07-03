@@ -2,13 +2,11 @@ package com.edgepay.app.sms
 
 import android.Manifest
 import android.app.Activity
-import android.content.BroadcastReceiver
-import android.content.Context
+import android.content.ComponentName
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
-import android.provider.Telephony
+import android.provider.Settings
 import android.telephony.SmsManager
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -21,6 +19,13 @@ class SmsModule(reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext), PermissionListener {
 
     private var permissionPromise: Promise? = null
+
+    private data class InboxMessage(
+        val sender: String,
+        val body: String,
+        val timestamp: Long,
+        val source: String,
+    )
 
     companion object {
         const val NAME = "SmsModule"
@@ -161,6 +166,28 @@ class SmsModule(reactContext: ReactApplicationContext) :
         promise.resolve(result)
     }
 
+    @ReactMethod
+    fun checkNotificationAccess(promise: Promise) {
+        promise.resolve(hasNotificationAccess())
+    }
+
+    @ReactMethod
+    fun openNotificationAccessSettings(promise: Promise) {
+        try {
+            val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            reactApplicationContext.startActivity(intent)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject(
+                "NOTIFICATION_SETTINGS_ERROR",
+                "Failed to open notification listener settings: ${e.message}",
+                e
+            )
+        }
+    }
+
     override fun onRequestPermissionsResult(
         requestCode: Int,
         permissions: Array<String>,
@@ -187,33 +214,67 @@ class SmsModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun readRecentSms(count: Int, promise: Promise) {
         try {
-            if (ContextCompat.checkSelfPermission(
-                    reactApplicationContext,
-                    Manifest.permission.READ_SMS
-                ) != PackageManager.PERMISSION_GRANTED
-            ) {
-                promise.reject("PERMISSION_DENIED", "READ_SMS permission not granted")
-                return
+            val merged = mutableListOf<InboxMessage>()
+            val canReadSms = ContextCompat.checkSelfPermission(
+                reactApplicationContext,
+                Manifest.permission.READ_SMS
+            ) == PackageManager.PERMISSION_GRANTED
+
+            if (canReadSms) {
+                val cursor = reactApplicationContext.contentResolver.query(
+                    android.net.Uri.parse("content://sms/inbox"),
+                    arrayOf("address", "body", "date"),
+                    null,
+                    null,
+                    "date DESC LIMIT $count"
+                )
+
+                cursor?.use {
+                    while (it.moveToNext()) {
+                        merged.add(
+                            InboxMessage(
+                                sender = it.getString(0) ?: "",
+                                body = it.getString(1) ?: "",
+                                timestamp = it.getLong(2),
+                                source = "SMS",
+                            )
+                        )
+                    }
+                }
             }
 
-            val cursor = reactApplicationContext.contentResolver.query(
-                android.net.Uri.parse("content://sms/inbox"),
-                arrayOf("address", "body", "date"),
-                null,
-                null,
-                "date DESC LIMIT $count"
+            merged.addAll(
+                MessageNotificationStore
+                    .getCachedNotificationMessages(reactApplicationContext, count)
+                    .map {
+                        InboxMessage(
+                            sender = it.sender,
+                            body = it.body,
+                            timestamp = it.timestamp,
+                            source = it.source,
+                        )
+                    }
             )
 
-            val messages = Arguments.createArray()
-            cursor?.use {
-                while (it.moveToNext()) {
-                    val sms = Arguments.createMap().apply {
-                        putString("sender", it.getString(0) ?: "")
-                        putString("body", it.getString(1) ?: "")
-                        putDouble("timestamp", (it.getLong(2)).toDouble())
+            val deduped = linkedMapOf<String, InboxMessage>()
+            merged
+                .sortedByDescending { it.timestamp }
+                .forEach { msg ->
+                    val key = "${msg.source}|${msg.sender}|${msg.body}|${msg.timestamp}"
+                    if (!deduped.containsKey(key)) {
+                        deduped[key] = msg
                     }
-                    messages.pushMap(sms)
                 }
+
+            val messages = Arguments.createArray()
+            deduped.values.take(count).forEach { msg ->
+                val sms = Arguments.createMap().apply {
+                    putString("sender", msg.sender)
+                    putString("body", msg.body)
+                    putDouble("timestamp", msg.timestamp.toDouble())
+                    putString("source", msg.source)
+                }
+                messages.pushMap(sms)
             }
 
             promise.resolve(messages)
@@ -230,5 +291,16 @@ class SmsModule(reactContext: ReactApplicationContext) :
 
     override fun onCatalystInstanceDestroy() {
         super.onCatalystInstanceDestroy()
+    }
+
+    private fun hasNotificationAccess(): Boolean {
+        val enabledListeners = Settings.Secure.getString(
+            reactApplicationContext.contentResolver,
+            "enabled_notification_listeners"
+        ) ?: return false
+
+        val component = ComponentName(reactApplicationContext, RcsNotificationListenerService::class.java)
+        return enabledListeners.contains(component.flattenToString()) ||
+            enabledListeners.contains(component.flattenToShortString())
     }
 }

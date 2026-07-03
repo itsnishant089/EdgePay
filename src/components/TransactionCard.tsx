@@ -4,6 +4,7 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import type { Transaction } from '../types';
 import { formatCurrency, formatRelativeTime } from '../utils/formatters';
+import { getTransactionAmountSign, isIncomingTransaction } from '../utils/transactionDisplay';
 import { useTheme, spacing, borderRadius } from '../theme';
 import { AvatarCircle } from './AvatarCircle';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -20,16 +21,13 @@ export const TransactionCard: React.FC<TransactionCardProps> = ({
   const { colors } = useTheme();
   const { amount, receiver, receiverName, status, timestamp, method } = transaction;
   const displayName = receiverName || receiver;
+  const sign = getTransactionAmountSign(transaction);
+  const incoming = isIncomingTransaction(transaction);
 
-  const isCredit = status === 'SUCCESS' && amount > 0; // Assuming positive amount or explicit credit logic
-  // For now, in our system, SENT means debit, SUCCESS could be credit or debit depending on context.
-  // We'll treat SENT as debit, SUCCESS as credit for visual distinction if we can't tell, but actually 
-  // let's assume 'status' indicates it. If it's a debit, we show black text. If credit, green.
-  // But wait, the previous logic just checked `status === 'SUCCESS'`. We'll stick to that but refine the colors.
-  
   const getStatusColor = () => {
     switch (status) {
-      case 'SUCCESS': return colors.success;
+      case 'SUCCESS': return incoming ? colors.success : colors.textPrimary;
+      case 'RECEIVED': return colors.success;
       case 'FAILED': return colors.error;
       case 'PENDING': return colors.warning;
       case 'CANCELLED': return colors.textTertiary;
@@ -38,6 +36,7 @@ export const TransactionCard: React.FC<TransactionCardProps> = ({
   };
 
   const statusColor = getStatusColor();
+  const amountColor = incoming ? colors.success : (status === 'FAILED' ? colors.error : colors.textPrimary);
 
   return (
     <TouchableOpacity
@@ -52,30 +51,37 @@ export const TransactionCard: React.FC<TransactionCardProps> = ({
           <Text style={[styles.name, { color: colors.textPrimary }]} numberOfLines={1}>{displayName}</Text>
           <Text style={[
             styles.amount,
-            { color: status === 'SUCCESS' ? colors.success : colors.textPrimary },
+            { color: amountColor },
             status === 'CANCELLED' && { color: colors.textTertiary, textDecorationLine: 'line-through' as const },
           ]}>
-            {status === 'SUCCESS' ? '+' : (status === 'CANCELLED' ? '' : '-')}{formatCurrency(amount)}
+            {sign}{formatCurrency(amount)}
           </Text>
         </View>
 
         <View style={styles.bottomRow}>
           <View style={styles.metaRow}>
-            {status !== 'SUCCESS' && status !== 'SENT' && (
+            {status !== 'SUCCESS' && status !== 'SENT' && status !== 'RECEIVED' && (
               <View style={[styles.statusBadge, { backgroundColor: statusColor + '15' }]}>
                 <Text style={[styles.statusText, { color: statusColor }]}>{status}</Text>
               </View>
             )}
-            
+
             <Text style={[styles.time, { color: colors.textTertiary }]}>{formatRelativeTime(timestamp)}</Text>
-            
+
             {transaction.upiId && (
               <View style={[styles.methodBadge, { backgroundColor: colors.surfaceHighlight }]}>
                 <Icon name="at" size={10} color={colors.textSecondary} />
                 <Text style={[styles.methodText, { color: colors.textSecondary }]}>UPI</Text>
               </View>
             )}
-            
+
+            {method === 'WALLET' && (
+              <View style={[styles.methodBadge, { backgroundColor: colors.surfaceHighlight }]}>
+                <Icon name="wallet-outline" size={10} color={colors.textSecondary} />
+                <Text style={[styles.methodText, { color: colors.textSecondary }]}>WALLET</Text>
+              </View>
+            )}
+
             {method === 'USSD' && !transaction.upiId && (
               <View style={[styles.methodBadge, { backgroundColor: colors.surfaceHighlight }]}>
                 <Icon name="cellphone-wireless" size={10} color={colors.textSecondary} />
